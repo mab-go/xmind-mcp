@@ -1,0 +1,168 @@
+# xmind-mcp
+
+<p align="center">
+  <a href="https://github.com/mab-go/xmind-mcp/actions/workflows/ci.yml"><img src="https://github.com/mab-go/xmind-mcp/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://pkg.go.dev/github.com/mab-go/xmind-mcp"><img src="https://pkg.go.dev/badge/github.com/mab-go/xmind-mcp.svg" alt="Go Reference" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+</p>
+
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io)
+server for reading and writing local [XMind](https://xmind.com) mind map
+files. XMind MCP exposes 22 tools that let any MCP-compatible AI client
+create, navigate, and edit `.xmind` files directly on disk.
+
+<p align="center">
+  <img src="docs/solar-system-mind-map.png" alt="A mind map of the Solar System created with xmind-mcp and Claude Desktop" width="85%" />
+</p>
+
+------------------------------------------------------------------------
+
+## Prerequisites
+
+- Go 1.26.1 or later
+- An MCP-compatible client (Claude Desktop, Cursor, etc.)
+
+------------------------------------------------------------------------
+
+## Installation
+
+### Using `go install` (recommended)
+
+```bash
+go install github.com/mab-go/xmind-mcp/cmd/xmind-mcp@latest
+```
+
+This fetches, builds, and installs the binary in one step. No cloning
+required.
+
+### Build from source
+
+```bash
+git clone https://github.com/mab-go/xmind-mcp.git
+cd xmind-mcp
+make build
+```
+
+The binary is written to `./bin/xmind-mcp` with version metadata from
+`git` (see the `build` target in the `Makefile`). A plain
+`go build ./cmd/xmind-mcp` also works but omits those ldflags.
+
+> **Note:** Pre-built binaries for all platforms will be available in a
+> future release.
+
+------------------------------------------------------------------------
+
+## MCP Client Configuration
+
+Add the following to your MCP client's configuration file. For Claude
+Desktop, that's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "xmind": {
+      "command": "xmind-mcp"
+    }
+  }
+}
+```
+
+If you built from source or the binary is not on your `PATH`, use the
+full path to the binary:
+
+```json
+{
+  "mcpServers": {
+    "xmind": {
+      "command": "/absolute/path/to/xmind-mcp"
+    }
+  }
+}
+```
+
+------------------------------------------------------------------------
+
+## Tools
+
+All tools are prefixed with `xmind_` to avoid collisions in multi-server
+environments.
+
+### Tier 1: File & Sheet Management
+
+| Tool                 | Description                                                                                    |
+|----------------------|------------------------------------------------------------------------------------------------|
+| `xmind_open_map`     | Parse a `.xmind` file and return a structural summary (sheet names, root topics, node counts). |
+| `xmind_list_sheets`  | Return the names and IDs of all sheets in a workbook.                                          |
+| `xmind_create_map`   | Create a new `.xmind` file with a single sheet and root topic.                                 |
+| `xmind_add_sheet`    | Add a new sheet to an existing workbook.                                                       |
+| `xmind_delete_sheet` | Remove a sheet from a workbook.                                                                |
+
+### Tier 2: Finding Topics
+
+These are the entry point for any write operation. Always call one of
+these before mutating a specific topic.
+
+| Tool                  | Description                                                                       |
+|-----------------------|-----------------------------------------------------------------------------------|
+| `xmind_get_subtree`   | Return the full topic hierarchy rooted at a given topic (or the whole sheet).     |
+| `xmind_search_topics` | Search for topics by keyword; returns matching topics with their IDs and context. |
+| `xmind_find_topic`    | Find a single topic by exact title; returns its ID and immediate context.         |
+
+### Tier 3: Topic Mutations
+
+All write tools require a `topic_id` obtained from a Tier 2 call.
+
+| Tool                         | Description                                                                   |
+|------------------------------|-------------------------------------------------------------------------------|
+| `xmind_add_topic`            | Add a new child topic under a specified parent.                               |
+| `xmind_add_topics_bulk`      | Add multiple topics (flat list or nested subtree) under a parent in one call. |
+| `xmind_rename_topic`         | Change the title of an existing topic.                                        |
+| `xmind_delete_topic`         | Remove a topic and all its descendants.                                       |
+| `xmind_move_topic`           | Reparent a topic (and its subtree) to a new parent.                           |
+| `xmind_reorder_children`     | Change the order of a topic's children without reparenting.                   |
+| `xmind_set_topic_properties` | Set or update metadata on a topic: notes, labels, markers, and links.         |
+| `xmind_add_floating_topic`   | Add a detached floating topic not connected to the main hierarchy.            |
+| `xmind_add_relationship`     | Draw a labeled connector between any two topics.                              |
+| `xmind_add_summary`          | Add a summary callout bracketing a range of sibling topics.                   |
+| `xmind_add_boundary`         | Add a visual boundary enclosure around all children of a topic.               |
+
+### Tier 4: Utilities
+
+| Tool                        | Description                                                            |
+|-----------------------------|------------------------------------------------------------------------|
+| `xmind_flatten_to_outline`  | Export a sheet or subtree as indented plain text or Markdown.          |
+| `xmind_import_from_outline` | Build a map or branch from an indented plain text or Markdown outline. |
+| `xmind_find_and_replace`    | Rename topics matching a pattern across an entire sheet.               |
+
+------------------------------------------------------------------------
+
+## Development
+
+First time only, install project-local tools (golangci-lint, goimports)
+into `./bin`:
+
+```bash
+make setup
+```
+
+Then:
+
+```bash
+# Build (binary in ./bin/xmind-mcp), tests, and lint
+make build test lint
+
+# Run the server locally (stdio MCP)
+make run
+```
+
+The primary test fixture is located at `testdata/kitchen-sink.xmind`. It
+exercises every supported XMind feature and should be used as the
+baseline for any handler development and testing. That file is stored in
+**Git LFS**; use a clone with LFS enabled (or run `git lfs pull`) before
+`make test`, or tests will fail on a pointer stub.
+
+------------------------------------------------------------------------
+
+## License
+
+MIT. See [LICENSE](LICENSE).

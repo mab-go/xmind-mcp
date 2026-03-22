@@ -1,0 +1,21 @@
+# golangci-lint v2 — https://golangci-lint.run/docs/configuration/file/
+version: "2"
+
+run:
+  timeout: 3m
+  # Go version follows go.mod when omitted; explicit override only if needed.
+
+linters:
+  default: standard
+  enable:
+    - gocritic
+    - misspell
+    - revive
+    - unconvert
+    - unparam
+  exclusions:
+    generated: strict
+
+formatters:
+  enable:
+    - goimports

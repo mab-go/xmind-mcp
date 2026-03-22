@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "golang.go",
+    "EditorConfig.EditorConfig",
+    "ms-vscode.makefile-tools",
+    "darkriszty.markdown-table-prettify"
+  ]
+}

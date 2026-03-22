@@ -1,0 +1,16 @@
+{
+    "makefile.configureOnOpen": false,
+    "go.formatTool": "goimports",
+    // Same binary as `make setup` / `make fmt` (pinned in Makefile via GOIMPORTS_VERSION).
+    "go.alternateTools": {
+        "goimports": "${workspaceFolder}/bin/goimports"
+    },
+    "[go]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "golang.go"
+    },
+    "cSpell.words": [
+        "pflag",
+        "xmind"
+    ]
+}
