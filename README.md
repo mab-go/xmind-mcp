@@ -3,6 +3,7 @@
 <p align="center">
   <a href="https://github.com/mab-go/xmind-mcp/actions/workflows/ci.yml"><img src="https://github.com/mab-go/xmind-mcp/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://pkg.go.dev/github.com/mab-go/xmind-mcp"><img src="https://pkg.go.dev/badge/github.com/mab-go/xmind-mcp.svg" alt="Go Reference" /></a>
+  <a href="https://deepwiki.com/mab-go/xmind-mcp"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
 </p>
 
