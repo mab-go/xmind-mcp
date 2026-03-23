@@ -31,7 +31,7 @@ OPEN ?= $(shell command -v xdg-open 2>/dev/null || echo "open")
 
 .PHONY: help \
         setup \
-        build install run \
+        build install run gen-example \
         test test\:cover \
         lint lint\:fix fmt vet \
         mod\:tidy mod\:verify \
@@ -97,6 +97,9 @@ install: ## Run go install with same ldflags (installs to GOPATH/bin or GOBIN)
 
 run: ## Run via go run (optional: ARGS="--flags")
 	go run -ldflags "$(LDFLAGS)" ./cmd/xmind-mcp $(ARGS)
+
+gen-example: ## Generate example mind map to ./example.xmind (override: OUT=path/to/file.xmind)
+	go run ./cmd/gen-example $(OUT)
 
 #------------------------------------------------------------------------------
 # Test

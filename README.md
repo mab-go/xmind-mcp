@@ -12,7 +12,7 @@ files. XMind MCP exposes 22 tools that let any MCP-compatible AI client
 create, navigate, and edit `.xmind` files directly on disk.
 
 <p align="center">
-  <img src="docs/solar-system-mind-map.png" alt="A mind map of the Solar System created with xmind-mcp and Claude Desktop" width="85%" />
+  <img src="docs/solar-system-mind-map.png" alt="An example mind map created with xmind-mcp and Claude Desktop" width="85%" />
 </p>
 
 ------------------------------------------------------------------------
