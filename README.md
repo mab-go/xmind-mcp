@@ -130,7 +130,7 @@ etc.)—see each row.
 | `xmind_delete_topic`         | Remove a topic and all its descendants.                                       |
 | `xmind_move_topic`           | Reparent a topic (and its subtree) to a new parent.                           |
 | `xmind_reorder_children`     | Change the order of a topic's children without reparenting.                   |
-| `xmind_set_topic_properties` | Set or update metadata on a topic: notes, labels, markers, and links.         |
+| `xmind_set_topic_properties` | Set or update topic metadata (notes, labels, markers, link, remove_markers); clearing rules are on the tool. |
 | `xmind_add_floating_topic`   | Add a detached floating topic not connected to the main hierarchy.            |
 | `xmind_add_relationship`     | Draw a labeled connector between any two topics.                              |
 | `xmind_delete_relationship`  | Remove a relationship by id (from `xmind_list_relationships`).                |

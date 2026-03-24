@@ -720,14 +720,22 @@ func (h *XMindHandler) SetTopicProperties(ctx context.Context, req mcp.CallToolR
 		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
 	}
 
-	if v, has := args["notes"]; has && v != nil {
-		s, ok := v.(string)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument notes: expected a string"), nil
-		}
-		topic.Notes = &xmind.Notes{
-			Plain:    &xmind.NoteContent{Content: s},
-			RealHTML: &xmind.NoteContent{Content: plainToRealHTML(s)},
+	if v, has := args["notes"]; has {
+		if v == nil {
+			topic.Notes = nil
+		} else {
+			s, ok := v.(string)
+			if !ok {
+				return mcp.NewToolResultError("invalid argument notes: expected a string"), nil
+			}
+			if s == "" {
+				topic.Notes = nil
+			} else {
+				topic.Notes = &xmind.Notes{
+					Plain:    &xmind.NoteContent{Content: s},
+					RealHTML: &xmind.NoteContent{Content: plainToRealHTML(s)},
+				}
+			}
 		}
 	}
 	if v, has := args["labels"]; has && v != nil {
@@ -759,6 +767,29 @@ func (h *XMindHandler) SetTopicProperties(ctx context.Context, req mcp.CallToolR
 			markers = append(markers, xmind.Marker{MarkerID: s})
 		}
 		topic.Markers = markers
+	}
+	if v, has := args["remove_markers"]; has && v != nil {
+		arr, ok := v.([]any)
+		if !ok {
+			return mcp.NewToolResultError("invalid argument remove_markers: expected an array"), nil
+		}
+		if len(arr) > 0 {
+			remove := make(map[string]struct{}, len(arr))
+			for i, el := range arr {
+				s, ok := el.(string)
+				if !ok {
+					return mcp.NewToolResultError(fmt.Sprintf("remove_markers[%d]: expected string", i)), nil
+				}
+				remove[s] = struct{}{}
+			}
+			out := make([]xmind.Marker, 0, len(topic.Markers))
+			for _, m := range topic.Markers {
+				if _, drop := remove[m.MarkerID]; !drop {
+					out = append(out, m)
+				}
+			}
+			topic.Markers = out
+		}
 	}
 	if v, has := args["link"]; has && v != nil {
 		s, ok := v.(string)
