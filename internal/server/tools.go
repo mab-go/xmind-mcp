@@ -43,13 +43,16 @@ var toolDeleteSheet = mcp.NewTool(
 var toolGetSubtree = mcp.NewTool(
 	"xmind_get_subtree",
 	mcp.WithDescription(
-		"Return the topic hierarchy from a topic (or the sheet root). Optional depth limits nesting; "+
-			"truncated branches report childrenCount.",
+		"Return the topic hierarchy from a topic (or the sheet root). Each node includes id, title, labels, markers, "+
+			"and structureClass when the topic overrides sheet layout. Optional include_notes adds plain-text notes; "+
+			"include_links adds hyperlink href. Optional depth limits nesting; truncated branches report childrenCount.",
 	),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet to read from")),
 	mcp.WithString("topic_id", mcp.Description("Root of the subtree; omit for sheet root")),
 	mcp.WithNumber("depth", mcp.Description("Max depth from subtree root (0 = root only with counts); omit for full tree; must be a whole number")),
+	mcp.WithBoolean("include_notes", mcp.Description("If true, include plain-text notes (notes.plain content) on nodes that have note text; omitted when empty")),
+	mcp.WithBoolean("include_links", mcp.Description("If true, include hyperlink href on nodes that have a link; omitted when empty")),
 )
 
 var toolSearchTopics = mcp.NewTool(
@@ -181,11 +184,16 @@ var toolAddBoundary = mcp.NewTool(
 
 var toolFlattenToOutline = mcp.NewTool(
 	"xmind_flatten_to_outline",
-	mcp.WithDescription("Export a topic subtree as indented plain text or Markdown (attached children only)."),
+	mcp.WithDescription(
+		"Export a topic subtree as indented plain text or Markdown (attached children only). "+
+			"Optional include_notes appends plain-text note lines below each topic: Markdown uses blockquotes (>), "+
+			"plain text uses indented [note] lines.",
+	),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet to read from")),
 	mcp.WithString("topic_id", mcp.Description("Root of subtree; omit for sheet root")),
 	mcp.WithString("format", mcp.Description(`Output format: "text" or "markdown" (default "markdown")`)),
+	mcp.WithBoolean("include_notes", mcp.Description("If true, append each topic's plain note lines below its title line")),
 )
 
 var toolImportFromOutline = mcp.NewTool(

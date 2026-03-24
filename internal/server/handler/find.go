@@ -14,12 +14,21 @@ import (
 
 // subtreeNode is the JSON shape for xmind_get_subtree (not a raw xmind.Topic).
 type subtreeNode struct {
-	ID            string         `json:"id"`
-	Title         string         `json:"title,omitempty"`
-	Labels        []string       `json:"labels,omitempty"`
-	Markers       []xmind.Marker `json:"markers,omitempty"`
-	Children      []*subtreeNode `json:"children,omitempty"`
-	ChildrenCount int            `json:"childrenCount,omitempty"`
+	ID             string         `json:"id"`
+	Title          string         `json:"title,omitempty"`
+	StructureClass string         `json:"structureClass,omitempty"`
+	Labels         []string       `json:"labels,omitempty"`
+	Markers        []xmind.Marker `json:"markers,omitempty"`
+	Notes          string         `json:"notes,omitempty"`
+	Href           string         `json:"href,omitempty"`
+	Children       []*subtreeNode `json:"children,omitempty"`
+	ChildrenCount  int            `json:"childrenCount,omitempty"`
+}
+
+// subtreeOpts controls optional fields when building a subtree.
+type subtreeOpts struct {
+	includeNotes bool
+	includeLinks bool
 }
 
 func directChildCount(t *xmind.Topic) int {
@@ -29,41 +38,57 @@ func directChildCount(t *xmind.Topic) int {
 	return len(t.Children.Attached) + len(t.Children.Detached) + len(t.Children.Summary)
 }
 
-func topicToSubtree(t *xmind.Topic, curDepth int, maxDepth *int) *subtreeNode {
+func plainNoteContent(t *xmind.Topic) string {
+	if t == nil || t.Notes == nil || t.Notes.Plain == nil {
+		return ""
+	}
+	return t.Notes.Plain.Content
+}
+
+func topicToSubtree(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpts) *subtreeNode {
 	if t == nil {
 		return nil
 	}
 	n := &subtreeNode{
-		ID:      t.ID,
-		Title:   t.Title,
-		Labels:  append([]string(nil), t.Labels...),
-		Markers: append([]xmind.Marker(nil), t.Markers...),
+		ID:             t.ID,
+		Title:          t.Title,
+		StructureClass: t.StructureClass,
+		Labels:         append([]string(nil), t.Labels...),
+		Markers:        append([]xmind.Marker(nil), t.Markers...),
+	}
+	if opts.includeNotes {
+		if plain := plainNoteContent(t); plain != "" {
+			n.Notes = plain
+		}
+	}
+	if opts.includeLinks && t.Href != "" {
+		n.Href = t.Href
 	}
 	if maxDepth == nil {
-		n.Children = childSubtrees(t, curDepth, nil)
+		n.Children = childSubtrees(t, curDepth, nil, opts)
 		return n
 	}
 	if curDepth >= *maxDepth {
 		n.ChildrenCount = directChildCount(t)
 		return n
 	}
-	n.Children = childSubtrees(t, curDepth, maxDepth)
+	n.Children = childSubtrees(t, curDepth, maxDepth, opts)
 	return n
 }
 
-func childSubtrees(t *xmind.Topic, curDepth int, maxDepth *int) []*subtreeNode {
+func childSubtrees(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpts) []*subtreeNode {
 	if t == nil || t.Children == nil {
 		return nil
 	}
 	var out []*subtreeNode
 	for i := range t.Children.Attached {
-		out = append(out, topicToSubtree(&t.Children.Attached[i], curDepth+1, maxDepth))
+		out = append(out, topicToSubtree(&t.Children.Attached[i], curDepth+1, maxDepth, opts))
 	}
 	for i := range t.Children.Detached {
-		out = append(out, topicToSubtree(&t.Children.Detached[i], curDepth+1, maxDepth))
+		out = append(out, topicToSubtree(&t.Children.Detached[i], curDepth+1, maxDepth, opts))
 	}
 	for i := range t.Children.Summary {
-		out = append(out, topicToSubtree(&t.Children.Summary[i], curDepth+1, maxDepth))
+		out = append(out, topicToSubtree(&t.Children.Summary[i], curDepth+1, maxDepth, opts))
 	}
 	return out
 }
@@ -96,6 +121,18 @@ func parseDepthOptional(raw any) (*int, *mcp.CallToolResult) {
 	default:
 		return nil, mcp.NewToolResultError("invalid argument depth: expected a number")
 	}
+}
+
+// parseBoolOptional reads an optional boolean MCP argument; missing or null is false.
+func parseBoolOptional(args map[string]any, key string) (bool, *mcp.CallToolResult) {
+	if raw, has := args[key]; has && raw != nil {
+		v, ok := raw.(bool)
+		if !ok {
+			return false, mcp.NewToolResultError("invalid argument " + key + ": expected a boolean")
+		}
+		return v, nil
+	}
+	return false, nil
 }
 
 // GetSubtree returns a JSON subtree from the sheet root or a topic id.
@@ -156,7 +193,17 @@ func (h *XMindHandler) GetSubtree(ctx context.Context, req mcp.CallToolRequest) 
 		maxDepth = md
 	}
 
-	node := topicToSubtree(root, 0, maxDepth)
+	includeNotes, berr := parseBoolOptional(args, "include_notes")
+	if berr != nil {
+		return berr, nil
+	}
+	includeLinks, berr2 := parseBoolOptional(args, "include_links")
+	if berr2 != nil {
+		return berr2, nil
+	}
+	opts := subtreeOpts{includeNotes: includeNotes, includeLinks: includeLinks}
+
+	node := topicToSubtree(root, 0, maxDepth, opts)
 	out, err := json.Marshal(node)
 	if err != nil {
 		return nil, fmt.Errorf("marshal get_subtree response: %w", err)

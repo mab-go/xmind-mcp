@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mab-go/xmind-mcp/internal/xmind"
@@ -9,6 +10,49 @@ import (
 
 // Stable topic ID from kitchen-sink Sheet 1 (Mind Map): "Alpha" under Subtopic 1.
 const kitchenSinkAlphaTopicID = "169d72af-6345-47ad-90b0-5b587f1f9619"
+
+const kitchenSinkSheet10Title = "Sheet 10 - Topic Properties"
+
+// Topic IDs from internal/xmind/reader_test.go (Sheet 10 — Topic Properties).
+const (
+	kitchenSinkSheet10NoteTopicID = "83785e34-fcdb-4049-8c42-15052c20d8d6"
+	kitchenSinkSheet10HrefTopicID = "e0d8096f-cc1a-4c33-bcc5-db9006481f85"
+)
+
+func kitchenSinkSheetIDByTitle(t *testing.T, title string) string {
+	t.Helper()
+	sheets, err := xmind.ReadMap(kitchenSinkPath(t))
+	if err != nil {
+		t.Fatalf("ReadMap: %v", err)
+	}
+	for i := range sheets {
+		if sheets[i].Title == title {
+			return sheets[i].ID
+		}
+	}
+	t.Fatalf("sheet not found: %s", title)
+	return ""
+}
+
+func assertSubtreeNoNotesField(t *testing.T, n *subtreeNode) {
+	t.Helper()
+	if n.Notes != "" {
+		t.Fatalf("expected no notes on node id %q, got %q", n.ID, n.Notes)
+	}
+	for _, c := range n.Children {
+		assertSubtreeNoNotesField(t, c)
+	}
+}
+
+func assertSubtreeNoHrefField(t *testing.T, n *subtreeNode) {
+	t.Helper()
+	if n.Href != "" {
+		t.Fatalf("expected no href on node id %q, got %q", n.ID, n.Href)
+	}
+	for _, c := range n.Children {
+		assertSubtreeNoHrefField(t, c)
+	}
+}
 
 func firstKitchenSinkSheetID(t *testing.T) string {
 	t.Helper()
@@ -383,5 +427,165 @@ func TestGetSubtreeDepthZero(t *testing.T) {
 	}
 	if node.ChildrenCount < 1 {
 		t.Fatalf("expected childrenCount, got %d", node.ChildrenCount)
+	}
+}
+
+func TestGetSubtreeSheet10StructureClassNotesHref(t *testing.T) {
+	h := NewXMindHandler()
+	sid := kitchenSinkSheetIDByTitle(t, kitchenSinkSheet10Title)
+
+	res := callTool(t, h.GetSubtree, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": sid,
+	})
+	if res.IsError {
+		t.Fatalf("GetSubtree: %s", textContent(t, res))
+	}
+	var root subtreeNode
+	if err := json.Unmarshal([]byte(textContent(t, res)), &root); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if root.Title != "Central Topic" {
+		t.Fatalf("title: %q", root.Title)
+	}
+	if root.StructureClass != "org.xmind.ui.map.clockwise" {
+		t.Fatalf("structureClass: got %q", root.StructureClass)
+	}
+
+	resNotes := callTool(t, h.GetSubtree, map[string]any{
+		"path":          kitchenSinkPath(t),
+		"sheet_id":      sid,
+		"topic_id":      kitchenSinkSheet10NoteTopicID,
+		"include_notes": true,
+	})
+	if resNotes.IsError {
+		t.Fatalf("GetSubtree: %s", textContent(t, resNotes))
+	}
+	var noteNode subtreeNode
+	if err := json.Unmarshal([]byte(textContent(t, resNotes)), &noteNode); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.HasPrefix(noteNode.Notes, "This is a simple, plain text note") {
+		t.Fatalf("notes: %q", noteNode.Notes)
+	}
+
+	resNoNotes := callTool(t, h.GetSubtree, map[string]any{
+		"path":          kitchenSinkPath(t),
+		"sheet_id":      sid,
+		"topic_id":      kitchenSinkSheet10NoteTopicID,
+		"include_notes": false,
+	})
+	if resNoNotes.IsError {
+		t.Fatalf("GetSubtree: %s", textContent(t, resNoNotes))
+	}
+	var noNotesTree subtreeNode
+	if err := json.Unmarshal([]byte(textContent(t, resNoNotes)), &noNotesTree); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	assertSubtreeNoNotesField(t, &noNotesTree)
+
+	resNoHref := callTool(t, h.GetSubtree, map[string]any{
+		"path":          kitchenSinkPath(t),
+		"sheet_id":      sid,
+		"topic_id":      kitchenSinkSheet10HrefTopicID,
+		"include_links": false,
+	})
+	if resNoHref.IsError {
+		t.Fatalf("GetSubtree: %s", textContent(t, resNoHref))
+	}
+	var noHrefTree subtreeNode
+	if err := json.Unmarshal([]byte(textContent(t, resNoHref)), &noHrefTree); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	assertSubtreeNoHrefField(t, &noHrefTree)
+
+	resHref := callTool(t, h.GetSubtree, map[string]any{
+		"path":          kitchenSinkPath(t),
+		"sheet_id":      sid,
+		"topic_id":      kitchenSinkSheet10HrefTopicID,
+		"include_links": true,
+	})
+	if resHref.IsError {
+		t.Fatalf("GetSubtree: %s", textContent(t, resHref))
+	}
+	var hrefNode subtreeNode
+	if err := json.Unmarshal([]byte(textContent(t, resHref)), &hrefNode); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if hrefNode.Href != "https://www.google.com" {
+		t.Fatalf("href: %q", hrefNode.Href)
+	}
+}
+
+func TestGetSubtreeInvalidIncludeNotesType(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.GetSubtree, map[string]any{
+		"path":          kitchenSinkPath(t),
+		"sheet_id":      sheetID,
+		"include_notes": "yes",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for non-boolean include_notes")
+	}
+}
+
+func TestGetSubtreeInvalidIncludeLinksType(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.GetSubtree, map[string]any{
+		"path":          kitchenSinkPath(t),
+		"sheet_id":      sheetID,
+		"include_links": "yes",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for non-boolean include_links")
+	}
+}
+
+func TestGetSubtreeIncludeNotesAndLinksBothTrue(t *testing.T) {
+	h := NewXMindHandler()
+	sid := kitchenSinkSheetIDByTitle(t, kitchenSinkSheet10Title)
+	res := callTool(t, h.GetSubtree, map[string]any{
+		"path":          kitchenSinkPath(t),
+		"sheet_id":      sid,
+		"topic_id":      kitchenSinkSheet10NoteTopicID,
+		"include_notes": true,
+		"include_links": true,
+	})
+	if res.IsError {
+		t.Fatalf("GetSubtree: %s", textContent(t, res))
+	}
+	var node subtreeNode
+	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.HasPrefix(node.Notes, "This is a simple, plain text note") {
+		t.Fatalf("notes: %q", node.Notes)
+	}
+}
+
+func TestGetSubtreeDepthWithIncludeFlags(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.GetSubtree, map[string]any{
+		"path":          kitchenSinkPath(t),
+		"sheet_id":      sheetID,
+		"depth":         float64(1),
+		"include_notes": true,
+		"include_links": true,
+	})
+	if res.IsError {
+		t.Fatalf("GetSubtree: %s", textContent(t, res))
+	}
+	var node subtreeNode
+	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if node.Title != "Central Topic" {
+		t.Fatalf("root title: %q", node.Title)
+	}
+	if len(node.Children) < 1 {
+		t.Fatal("expected children at depth 1")
 	}
 }
