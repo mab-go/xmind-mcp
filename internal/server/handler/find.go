@@ -367,6 +367,7 @@ func childTitlesInWalkOrder(t *xmind.Topic) []string {
 }
 
 // FindTopic returns the first topic with an exact case-sensitive title (preorder DFS).
+// If parent_id is set, the walk starts at that topic (which may itself match).
 func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
 	args := req.GetArguments()
@@ -409,9 +410,25 @@ func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
 	}
 
+	searchRoot := &sh.RootTopic
+	if v, has := args["parent_id"]; has && v != nil {
+		pid, ok := v.(string)
+		if !ok {
+			return mcp.NewToolResultError("invalid argument parent_id: expected a string"), nil
+		}
+		if pid == "" {
+			return mcp.NewToolResultError("invalid argument parent_id: expected a non-empty string"), nil
+		}
+		topic := findTopicByID(&sh.RootTopic, pid)
+		if topic == nil {
+			return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", pid)), nil
+		}
+		searchRoot = topic
+	}
+
 	var found *xmind.Topic
 	var foundParent *xmind.Topic
-	walkTopics(&sh.RootTopic, 0, nil, func(t *xmind.Topic, _ int, parent *xmind.Topic) bool {
+	walkTopics(searchRoot, 0, nil, func(t *xmind.Topic, _ int, parent *xmind.Topic) bool {
 		if t.Title == wantTitle {
 			found = t
 			foundParent = parent
