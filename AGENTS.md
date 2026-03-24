@@ -16,6 +16,8 @@ This file is the authoritative briefing for any AI agent working on this project
 cmd/
   xmind-mcp/
     main.go               — cobra command; calls server.RunStdioServer()
+  gen-example/
+    main.go               — dev utility; generates the README example map via xmind package directly
 internal/
   server/
     server.go             — MCP server setup and tool registration
@@ -35,9 +37,16 @@ internal/
     reader.go             — open zip, parse content.json → []Sheet
     writer.go             — serialize []Sheet → content.json, write back to zip
     atomic_replace.go     — replaceTempFile: cross-platform atomic rename helper
+    defaults.go           — DefaultTheme and DefaultSheetExtensions for new maps
+    default_theme.json    — embedded default theme blob (sourced from kitchen-sink fixture)
+    stub_content.xml      — embedded legacy content.xml written into every new zip
   logging/                — context-carried logging helpers; do not modify
 testdata/
   kitchen-sink.xmind      — primary test fixture; exercises every supported feature
+.cursor/
+  rules/
+    keep-docs-current.mdc — always-on rule: update docs after structural changes
+  skills/                 — agent skill definitions (invoke via /skill-name)
 ```
 
 ---
@@ -215,6 +224,17 @@ For zip and JSON handling, use Go stdlib only: `archive/zip` and `encoding/json`
 ### Verification before you finish
 
 Treat a change as incomplete until **`make build test lint`** passes locally. The Makefile runs **golangci-lint** (including **revive**); do not rely on `go test` alone to catch style and API-surface rules.
+
+Also verify that documentation reflects the change before finishing. Update **`AGENTS.md`**, **`.cursor/rules/`**, and **`.cursor/skills/`** as needed:
+
+| Change made | What to review/update |
+|---|---|
+| New file added or removed | `Project Structure` tree in `AGENTS.md` |
+| New handler helper added to `handler.go` | Traversal/lookup utilities table in `AGENTS.md` |
+| New tool registered | Conventions section in `AGENTS.md` if a new pattern is introduced |
+| New struct field or codec allowlist entry | Schema Critical Notes in `AGENTS.md` |
+| New convention established | `Conventions` section in `AGENTS.md` |
+| New `.cursor/rules/` or `.cursor/skills/` file | Reflect in `AGENTS.md` if it affects agent behavior |
 
 ---
 
