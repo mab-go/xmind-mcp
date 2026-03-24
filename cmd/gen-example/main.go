@@ -72,10 +72,10 @@ func withLink(t xmind.Topic, url string) xmind.Topic {
 	return t
 }
 
-func withTaskStatus(t xmind.Topic, status string) xmind.Topic {
+func withTaskStatus(t xmind.Topic) xmind.Topic {
 	t.Extensions = append(t.Extensions, xmind.Extension{
 		Provider: "org.xmind.ui.task",
-		Content:  map[string]any{"status": status},
+		Content:  map[string]any{"status": "done"},
 	})
 	return t
 }
@@ -173,11 +173,11 @@ func buildSheet() xmind.Sheet {
 
 	// -- Mutation lifecycle --
 
-	step1 := withMarkers(withTaskStatus(leaf("Open .xmind zip"), "done"), "task-start")
-	step2 := withMarkers(withTaskStatus(leaf("Parse content.json"), "done"), "task-3oct")
-	step3 := withMarkers(withTaskStatus(leaf("Mutate in memory"), "done"), "task-half")
-	step4 := withMarkers(withTaskStatus(leaf("Write temp → atomic swap"), "done"), "task-7oct")
-	step5 := withMarkers(withTaskStatus(leaf("Return result"), "done"), "task-done")
+	step1 := withMarkers(withTaskStatus(leaf("Open .xmind zip")), "task-start")
+	step2 := withMarkers(withTaskStatus(leaf("Parse content.json")), "task-3oct")
+	step3 := withMarkers(withTaskStatus(leaf("Mutate in memory")), "task-half")
+	step4 := withMarkers(withTaskStatus(leaf("Write temp → atomic swap")), "task-7oct")
+	step5 := withMarkers(withTaskStatus(leaf("Return result")), "task-done")
 
 	lifecycle := topic("Mutation Lifecycle", step1, step2, step3, step4, step5)
 	lifecycle = withNote(lifecycle, "Every mutating tool call follows this exact cycle. No session state, no temp files left behind. If a write fails mid-way, the original file is untouched.")
