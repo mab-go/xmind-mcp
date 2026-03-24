@@ -123,6 +123,80 @@ func (h *XMindHandler) ListSheets(ctx context.Context, req mcp.CallToolRequest) 
 	return textResult(string(out)), nil
 }
 
+// listRelationshipsResponse is the JSON shape returned by xmind_list_relationships.
+type listRelationshipsResponse struct {
+	SheetID           string                  `json:"sheetId"`
+	RelationshipCount int                     `json:"relationshipCount"`
+	Relationships     []listRelationshipsItem `json:"relationships"`
+}
+
+type listRelationshipsItem struct {
+	ID        string `json:"id"`
+	End1ID    string `json:"end1Id"`
+	End1Title string `json:"end1Title"`
+	End2ID    string `json:"end2Id"`
+	End2Title string `json:"end2Title"`
+	Title     string `json:"title,omitempty"`
+}
+
+// ListRelationships returns all relationships on a sheet with endpoint topic titles.
+func (h *XMindHandler) ListRelationships(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_ = ctx
+	args := req.GetArguments()
+	absPath, toolErr := absPathFromArgs(args)
+	if toolErr != nil {
+		return toolErr, nil
+	}
+	sheetID, terr := requireString(args, "sheet_id")
+	if terr != nil {
+		return terr, nil
+	}
+
+	sheets, toolErr2, err := statAndReadMap(absPath)
+	if err != nil {
+		return nil, err
+	}
+	if toolErr2 != nil {
+		return toolErr2, nil
+	}
+
+	sh := findSheetByID(sheets, sheetID)
+	if sh == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	}
+
+	rels := make([]listRelationshipsItem, 0, len(sh.Relationships))
+	for i := range sh.Relationships {
+		rel := &sh.Relationships[i]
+		item := listRelationshipsItem{
+			ID:     rel.ID,
+			End1ID: rel.End1ID,
+			End2ID: rel.End2ID,
+		}
+		if t1 := findTopicByID(&sh.RootTopic, rel.End1ID); t1 != nil {
+			item.End1Title = t1.Title
+		}
+		if t2 := findTopicByID(&sh.RootTopic, rel.End2ID); t2 != nil {
+			item.End2Title = t2.Title
+		}
+		if rel.Title != "" {
+			item.Title = rel.Title
+		}
+		rels = append(rels, item)
+	}
+
+	resp := listRelationshipsResponse{
+		SheetID:           sh.ID,
+		RelationshipCount: len(rels),
+		Relationships:     rels,
+	}
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("marshal list_relationships response: %w", err)
+	}
+	return textResult(string(out)), nil
+}
+
 // bumpAllSheetsRevisionID assigns a new UUID v4 revisionId to every sheet in the slice (in place).
 func bumpAllSheetsRevisionID(sheets []xmind.Sheet) {
 	for i := range sheets {

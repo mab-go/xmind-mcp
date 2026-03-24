@@ -7,10 +7,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
 </p>
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io)
-server for reading and writing local [XMind](https://xmind.com) mind map
-files. XMind MCP exposes 22 tools that let any MCP-compatible AI client
-create, navigate, and edit `.xmind` files directly on disk.
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for
+reading and writing local [XMind](https://xmind.com) mind map files. XMind MCP
+exposes 24 tools that let any MCP-compatible AI client create, navigate, and
+edit `.xmind` files directly on disk.
 
 <p align="center">
   <img src="docs/xmind-mcp-repo-mind-map.png" alt="A mind map overview of the xmind-mcp project" width="85%" />
@@ -20,8 +20,13 @@ create, navigate, and edit `.xmind` files directly on disk.
 
 ## Prerequisites
 
+### Building
+
 - Go 1.26.1 or later
-- An MCP-compatible client (Claude Desktop, Cursor, etc.)
+
+### Using
+
+- Any MCP-compatible client (Claude Desktop, Cursor, etc.)
 
 ------------------------------------------------------------------------
 
@@ -97,11 +102,13 @@ environments.
 | `xmind_create_map`   | Create a new `.xmind` file with a single sheet and root topic.                                 |
 | `xmind_add_sheet`    | Add a new sheet to an existing workbook.                                                       |
 | `xmind_delete_sheet` | Remove a sheet from a workbook.                                                                |
+| `xmind_list_relationships` | List all relationships on a sheet (endpoint ids and topic titles as JSON).               |
 
 ### Tier 2: Finding Topics
 
-These are the entry point for any write operation. Always call one of
-these before mutating a specific topic.
+Use these to resolve topic ids and titles before editing a specific branch
+of the tree. Some write tools instead need sheet-level ids or ids from
+`xmind_list_relationships`—see each tool’s description.
 
 | Tool                  | Description                                                                       |
 |-----------------------|-----------------------------------------------------------------------------------|
@@ -111,7 +118,9 @@ these before mutating a specific topic.
 
 ### Tier 3: Topic Mutations
 
-All write tools require a `topic_id` obtained from a Tier 2 call.
+Most tools here target a topic and take a `topic_id` from Tier 2 (or from
+prior results). A few use other ids (`from_id`/`to_id`, `relationship_id`,
+etc.)—see each row.
 
 | Tool                         | Description                                                                   |
 |------------------------------|-------------------------------------------------------------------------------|
@@ -124,6 +133,7 @@ All write tools require a `topic_id` obtained from a Tier 2 call.
 | `xmind_set_topic_properties` | Set or update metadata on a topic: notes, labels, markers, and links.         |
 | `xmind_add_floating_topic`   | Add a detached floating topic not connected to the main hierarchy.            |
 | `xmind_add_relationship`     | Draw a labeled connector between any two topics.                              |
+| `xmind_delete_relationship`  | Remove a relationship by id (from `xmind_list_relationships`).                |
 | `xmind_add_summary`          | Add a summary callout bracketing a range of sibling topics.                   |
 | `xmind_add_boundary`         | Add a visual boundary enclosure around all children of a topic.               |
 
@@ -157,10 +167,10 @@ make run
 ```
 
 The primary test fixture is located at `testdata/kitchen-sink.xmind`. It
-exercises every supported XMind feature and should be used as the
-baseline for any handler development and testing. That file is stored in
-**Git LFS**; use a clone with LFS enabled (or run `git lfs pull`) before
-`make test`, or tests will fail on a pointer stub.
+exercises every supported XMind feature and should be used as the baseline for
+any handler development and testing. That file is stored in **Git LFS**; use a
+clone with LFS enabled (or run `git lfs pull`) before `make test`, or tests will
+fail on a pointer stub.
 
 ------------------------------------------------------------------------
 
