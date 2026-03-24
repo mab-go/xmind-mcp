@@ -16,8 +16,6 @@ import (
 	"github.com/mab-go/xmind-mcp/internal/xmind"
 )
 
-// structureClass matches what the XMind app writes for new maps (unbalanced radial).
-// Do NOT use org.xmind.ui.map.clockwise — that forces a one-directional layout.
 const structureClass = "org.xmind.ui.map.unbalanced"
 
 func main() {
@@ -45,180 +43,250 @@ func topic(title string, children ...xmind.Topic) xmind.Topic {
 	return t
 }
 
-func leaves(titles ...string) []xmind.Topic {
-	ts := make([]xmind.Topic, len(titles))
-	for i, t := range titles {
-		ts[i] = xmind.Topic{ID: id(), Title: t}
+func leaf(title string) xmind.Topic {
+	return xmind.Topic{ID: id(), Title: title}
+}
+
+func withMarkers(t xmind.Topic, ids ...string) xmind.Topic {
+	for _, m := range ids {
+		t.Markers = append(t.Markers, xmind.Marker{MarkerID: m})
 	}
-	return ts
+	return t
+}
+
+func withLabels(t xmind.Topic, labels ...string) xmind.Topic {
+	t.Labels = append(t.Labels, labels...)
+	return t
+}
+
+func withNote(t xmind.Topic, note string) xmind.Topic {
+	t.Notes = &xmind.Notes{
+		Plain:    &xmind.NoteContent{Content: note},
+		RealHTML: &xmind.NoteContent{Content: "<div>" + note + "</div>"},
+	}
+	return t
+}
+
+func withLink(t xmind.Topic, url string) xmind.Topic {
+	t.Href = url
+	return t
+}
+
+func withTaskStatus(t xmind.Topic, status string) xmind.Topic {
+	t.Extensions = append(t.Extensions, xmind.Extension{
+		Provider: "org.xmind.ui.task",
+		Content:  map[string]any{"status": status},
+	})
+	return t
 }
 
 // ── map construction ─────────────────────────────────────────────────────────
 
 func buildSheet() xmind.Sheet {
 
-	// ── Sun ──────────────────────────────────────────────────────────────────
-	sun := topic("☀️ Sun", leaves(
-		"Type: G-type main-sequence star",
-		"Age: ~4.6 billion years",
-		"Diameter: 1,392,700 km",
-		"Surface Temp: ~5,500°C",
-	)...)
-	sun.Markers = []xmind.Marker{{MarkerID: "star-yellow"}}
+	// ═══════════════════════════════════════════════════════════════════════
+	// Branch 1: Tools
+	//
+	// Each tier gets a handful of representative tool names as leaves,
+	// with the full list in the note. Enough to look populated without
+	// listing all 22 individually.
+	// ═══════════════════════════════════════════════════════════════════════
 
-	// ── Inner Planets ─────────────────────────────────────────────────────────
-	mercury := topic("Mercury", leaves(
-		"Moons: None",
-		"Diameter: 4,879 km",
-		"Orbit: 88 days",
-		"Closest to the Sun",
-	)...)
+	tier1 := topic("Tier 1 — File & Sheet Mgmt",
+		withMarkers(leaf("open_map"), "priority-1"),
+		withMarkers(leaf("create_map"), "priority-1"),
+		withMarkers(leaf("add_sheet"), "priority-1"),
+	)
+	tier1 = withNote(tier1, "5 tools. Also: list_sheets, delete_sheet. Workbook-level operations — typically the first calls in any agentic workflow.")
 
-	venus := topic("Venus", leaves(
-		"Moons: None",
-		"Diameter: 12,104 km",
-		"Orbit: 225 days",
-		"Hottest planet",
-	)...)
+	tier2 := topic("Tier 2 — Finding Topics",
+		withMarkers(leaf("get_subtree"), "priority-2"),
+		withMarkers(leaf("search_topics"), "priority-2"),
+		withMarkers(leaf("find_topic"), "priority-2"),
+	)
+	tier2 = withNote(tier2, "Entry point for any write operation. Always call one of these first to obtain a topic ID.")
 
-	earthLeaves := leaves("Moon: Luna", "Diameter: 12,756 km", "Orbit: 365 days", "Only known life")
-	earth := topic("Earth", earthLeaves...)
-	earth.Labels = []string{"habitable zone"}
-	earth.Markers = []xmind.Marker{{MarkerID: "flag-blue"}}
+	tier3 := topic("Tier 3 — Topic Mutations",
+		withMarkers(leaf("add_topic"), "priority-3"),
+		withMarkers(leaf("rename_topic"), "priority-3"),
+		withMarkers(leaf("delete_topic"), "priority-3"),
+		withMarkers(leaf("move_topic"), "priority-3"),
+		withMarkers(leaf("set_topic_properties"), "priority-3"),
+		withMarkers(leaf("add_relationship"), "priority-3"),
+		withMarkers(leaf("add_summary"), "priority-3"),
+		withMarkers(leaf("add_boundary"), "priority-3"),
+	)
+	tier3 = withNote(tier3, "11 tools total. Also: add_topics_bulk, reorder_children, add_floating_topic. All require a topic_id from a Tier 2 call.")
 
-	// Keep a reference to the "Only known life" leaf for the relationship.
-	onlyKnownLife := earthLeaves[3]
+	tier4 := topic("Tier 4 — Utilities",
+		withMarkers(leaf("flatten_to_outline"), "priority-4"),
+		withMarkers(leaf("import_from_outline"), "priority-4"),
+		withMarkers(leaf("find_and_replace"), "priority-4"),
+	)
+	tier4 = withNote(tier4, "Export to text/markdown, import from outlines, bulk rename across a sheet.")
 
-	mars := topic("Mars", leaves(
-		"Moons: Phobos, Deimos",
-		"Diameter: 6,792 km",
-		"Orbit: 687 days",
-		"Tallest volcano in solar system",
-	)...)
+	tools := topic("🛠️ 22 Tools", tier1, tier2, tier3, tier4)
+	tools = withNote(tools, "All prefixed with xmind_ to avoid collisions in multi-server MCP environments.")
 
-	innerPlanets := topic("🪨 Inner Planets", mercury, venus, earth, mars)
-
-	// Summary: "Rocky worlds" bracketing all four inner planets (indices 0–3).
-	summaryTopicID := id()
-	innerPlanets.Children.Summary = []xmind.Topic{{ID: summaryTopicID, Title: "Rocky worlds"}}
-	innerPlanets.Summaries = []xmind.Summary{{
+	// Summary across all four tiers.
+	toolsSummaryID := id()
+	tools.Children.Summary = []xmind.Topic{{ID: toolsSummaryID, Title: "find first, then act"}}
+	tools.Summaries = []xmind.Summary{{
 		ID:      id(),
 		Range:   "(0,3)",
-		TopicID: summaryTopicID,
+		TopicID: toolsSummaryID,
 	}}
 
-	// ── Outer Planets ─────────────────────────────────────────────────────────
-	jupiterMoons := xmind.Topic{ID: id(), Title: "Moons: Io, Europa, Ganymede, Callisto (+91)"}
-	jupiter := topic("Jupiter",
-		jupiterMoons,
-		xmind.Topic{ID: id(), Title: "Diameter: 142,984 km"},
-		xmind.Topic{ID: id(), Title: "Orbit: 12 years"},
-		xmind.Topic{ID: id(), Title: "Great Red Spot"},
+	// ═══════════════════════════════════════════════════════════════════════
+	// Branch 2: How It Works
+	//
+	// Architecture (conceptual data flow), the read/write lifecycle, and
+	// schema gotchas — one branch telling the whole design story.
+	// ═══════════════════════════════════════════════════════════════════════
+
+	// -- Architecture: the conceptual layers --
+
+	typesNode := withNote(
+		withLabels(leaf("content.json → Go structs"), "xmind/types.go"),
+		"Custom UnmarshalJSON/MarshalJSON on every type. Unknown JSON fields are captured into an 'extra' map and merged back on marshal — future XMind fields survive round-trips without data loss.",
 	)
-	jupiter.Labels = []string{"gas giant"}
-	jupiter.Markers = []xmind.Marker{{MarkerID: "priority-1"}}
 
-	saturn := topic("Saturn", leaves(
-		"Moons: Titan, Enceladus, Mimas (+143)",
-		"Diameter: 120,536 km",
-		"Orbit: 29 years",
-		"Iconic ring system",
-	)...)
-	saturn.Labels = []string{"gas giant"}
+	zipNode := withNote(
+		withLabels(leaf("ZIP read/write layer"), "xmind/reader.go, writer.go"),
+		"Reader opens .xmind zip, extracts content.json, unmarshals into []Sheet. Writer serializes sheets, writes to temp file, then atomic os.Rename swap. Non-content entries (images, XML stub) are copied byte-for-byte via OpenRaw/CreateRaw.",
+	)
 
-	uranus := topic("Uranus", leaves(
-		"Moons: Titania, Oberon, Miranda (+24)",
-		"Diameter: 51,118 km",
-		"Orbit: 84 years",
-		"Rotates on its side",
-	)...)
-	uranus.Labels = []string{"ice giant"}
+	handlersNode := withNote(
+		withLabels(leaf("22 tool handlers"), "handler/*.go"),
+		"Each handler: parse args → open file → find sheet → find topic → apply change → write file → return result. Stateless — no session, no in-memory cache between calls.",
+	)
 
-	neptune := topic("Neptune", leaves(
-		"Moons: Triton (+15 others)",
-		"Diameter: 49,528 km",
-		"Orbit: 165 years",
-		"Strongest winds in solar system",
-	)...)
-	neptune.Labels = []string{"ice giant"}
+	mcpNode := withNote(
+		withLabels(leaf("MCP server + stdio transport"), "server/server.go"),
+		"Tool registration and stdio transport via mark3labs/mcp-go. Lifecycle hooks for logging. All tool names prefixed xmind_ for multi-server safety.",
+	)
 
-	outerPlanets := topic("🪐 Outer Planets", jupiter, saturn, uranus, neptune)
+	arch := topic("Architecture",
+		typesNode, zipNode, handlersNode, mcpNode,
+	)
+	arch = withMarkers(arch, "star-blue")
 
-	// Boundary: "Gas & Ice Giants" around all outer planet children.
-	outerPlanets.Boundaries = []xmind.Boundary{{
+	// -- Mutation lifecycle --
+
+	step1 := withMarkers(withTaskStatus(leaf("Open .xmind zip"), "done"), "task-start")
+	step2 := withMarkers(withTaskStatus(leaf("Parse content.json"), "done"), "task-3oct")
+	step3 := withMarkers(withTaskStatus(leaf("Mutate in memory"), "done"), "task-half")
+	step4 := withMarkers(withTaskStatus(leaf("Write temp → atomic swap"), "done"), "task-7oct")
+	step5 := withMarkers(withTaskStatus(leaf("Return result"), "done"), "task-done")
+
+	lifecycle := topic("Mutation Lifecycle", step1, step2, step3, step4, step5)
+	lifecycle = withNote(lifecycle, "Every mutating tool call follows this exact cycle. No session state, no temp files left behind. If a write fails mid-way, the original file is untouched.")
+
+	// -- Gotchas --
+
+	summaryGotcha := withNote(
+		withMarkers(leaf("Summaries need a double-write"), "flag-red"),
+		"Must write to BOTH children.summary (the topic) AND parent.summaries (the range descriptor). Omitting either produces a broken map in XMind.",
+	)
+
+	relGotcha := withNote(
+		withMarkers(leaf("Relationships live on the sheet"), "flag-red"),
+		"Sheet.Relationships[], NOT on any topic. Writing to a topic appears to work but won't render.",
+	)
+
+	errorGotcha := withNote(
+		withMarkers(leaf("Tool errors ≠ protocol errors"), "flag-orange"),
+		"Expected failures (not found, bad args) → return (*CallToolResult, nil) with IsError. Unexpected failures (I/O, marshal) → return (nil, error). Conflating these makes failures look like crashes to the model.",
+	)
+
+	preserveGotcha := withNote(
+		withMarkers(leaf("Preserve unknown JSON fields"), "flag-yellow"),
+		"json_codec.go captures unknown keys into an 'extra' map and merges them back on marshal. Prevents silent data loss when XMind ships new features.",
+	)
+
+	gotchas := topic("Gotchas", summaryGotcha, relGotcha, errorGotcha, preserveGotcha)
+
+	// Boundary around the gotchas.
+	gotchas.Boundaries = []xmind.Boundary{{
 		ID:    id(),
 		Range: "master",
-		Title: "Gas & Ice Giants",
+		Title: "Here be dragons",
 	}}
 
-	// ── Dwarf Planets ─────────────────────────────────────────────────────────
-	dwarfPlanets := topic("🌑 Dwarf Planets",
-		topic("Pluto", leaves(
-			"Moons: Charon, Nix, Hydra",
-			"Orbit: 248 years",
-			"Reclassified in 2006",
-		)...),
-		topic("Eris", leaves(
-			"Moon: Dysnomia",
-			"Orbit: 559 years",
-			"Most massive dwarf planet",
-		)...),
-		topic("Ceres", leaves(
-			"Moons: None",
-			"Orbit: 4.6 years",
-			"Only dwarf planet in asteroid belt",
-		)...),
+	design := topic("⚙️ How It Works", arch, lifecycle, gotchas)
+	design = withLink(design, "https://github.com/mab-go/xmind-mcp")
+
+	// Relationship: lifecycle's atomic swap ↔ error handling gotcha
+	rel := xmind.Relationship{
+		ID:     id(),
+		End1ID: step4.ID,
+		End2ID: errorGotcha.ID,
+		Title:  "both protect file integrity",
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Branch 3: What It Supports
+	//
+	// The XMind features the server can read and write — this is what a
+	// user actually wants to know: "what can I do with this?"
+	// ═══════════════════════════════════════════════════════════════════════
+
+	topicFeatures := topic("Topic Markup",
+		withMarkers(leaf("Notes (plain + HTML)"), "c_symbol_pen"),
+		withMarkers(leaf("Labels"), "tag-blue"),
+		withMarkers(leaf("Markers (7 categories)"), "star-yellow"),
+		withMarkers(leaf("Links (web, file, cross-topic)"), "symbol-lightning"),
+		withMarkers(leaf("Task checkboxes"), "task-done"),
 	)
 
-	// ── Small Bodies ──────────────────────────────────────────────────────────
-	smallBodies := topic("🪨 Small Bodies",
-		topic("Asteroid Belt", leaves(
-			"Between Mars and Jupiter",
-			"Millions of rocky objects",
-			"Largest: Ceres, Vesta, Pallas",
-		)...),
-		topic("Kuiper Belt", leaves(
-			"Beyond Neptune",
-			"Source of short-period comets",
-			"Largest: Pluto, Eris, Makemake",
-		)...),
-		topic("Oort Cloud", leaves(
-			"~2,000–100,000 AU from Sun",
-			"Source of long-period comets",
-			"Outer boundary of solar system",
-		)...),
+	sheetFeatures := topic("Sheet Features",
+		leaf("Relationships between any two topics"),
+		leaf("Summaries spanning sibling ranges"),
+		leaf("Boundaries grouping children"),
+		leaf("Floating topics (detached)"),
 	)
 
-	// ── Root ──────────────────────────────────────────────────────────────────
+	mapFeatures := topic("Map Features",
+		leaf("All 9 structure types"),
+		leaf("Multi-sheet workbooks"),
+		leaf("Outline import/export"),
+		withNote(leaf("Round-trip fidelity"), "Unknown fields, themes, extensions, and binary resources are preserved through read/write cycles."),
+	)
+
+	supports := topic("📄 What It Supports", topicFeatures, sheetFeatures, mapFeatures)
+	supports = withNote(supports, "The server reads and writes .xmind files — ZIP archives containing content.json, metadata.json, a content.xml stub, and optional resources/ for images and attachments.")
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Branch 4: Project Info (lightweight)
+	// ═══════════════════════════════════════════════════════════════════════
+
+	meta := topic("📋 Project",
+		withLink(withLabels(leaf("github.com/mab-go/xmind-mcp"), "source"), "https://github.com/mab-go/xmind-mcp"),
+		withLabels(leaf("MIT License"), "open source"),
+		withLabels(leaf("Go 1.26.1+"), "prerequisite"),
+		withLink(withLabels(leaf("mark3labs/mcp-go"), "MCP protocol"), "https://github.com/mark3labs/mcp-go"),
+	)
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Root
+	// ═══════════════════════════════════════════════════════════════════════
+
 	root := xmind.Topic{
 		ID:             id(),
 		Class:          "topic",
-		Title:          "The Solar System",
+		Title:          "xmind-mcp",
 		StructureClass: structureClass,
 		Children: &xmind.Children{
-			Attached: []xmind.Topic{
-				sun,
-				innerPlanets,
-				outerPlanets,
-				dwarfPlanets,
-				smallBodies,
-			},
+			Attached: []xmind.Topic{tools, design, supports, meta},
 		},
 	}
-
-	// Relationship: "Only known life" (Earth) → Jupiter's moons, "Europa: potential life?"
-	rel := xmind.Relationship{
-		ID:     id(),
-		End1ID: onlyKnownLife.ID,
-		End2ID: jupiterMoons.ID,
-		Title:  "Europa: potential life?",
-	}
+	root = withNote(root, "An MCP server for reading and writing local XMind mind map files. 22 tools let any MCP-compatible AI client create, navigate, and edit .xmind files directly on disk.")
 
 	return xmind.Sheet{
 		ID:               id(),
 		RevisionID:       id(),
 		Class:            "sheet",
-		Title:            "Solar System",
+		Title:            "xmind-mcp",
 		TopicOverlapping: "overlap",
 		RootTopic:        root,
 		Relationships:    []xmind.Relationship{rel},
