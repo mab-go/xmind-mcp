@@ -69,12 +69,20 @@ var toolSearchTopics = mcp.NewTool(
 var toolFindTopic = mcp.NewTool(
 	"xmind_find_topic",
 	mcp.WithDescription(
-		"Find a topic by exact title (case-sensitive). Returns the first depth-first match; "+
-			"use xmind_search_topics if the title may be ambiguous.",
+		"Find a topic by exact title (case-sensitive). Returns the first depth-first match within the chosen scope. "+
+			"Optional parent_id is the subtree root to search under (same role as topic_id on xmind_get_subtree); "+
+			"it is not the structural parent used by xmind_add_topic and other write tools. "+
+			"Omit parent_id or null for the whole sheet. The scope root is visited first, so it can match if its title equals the search title; "+
+			"parentTitle and siblingTitles are relative to that walk, so they are empty when the match is the scope root. "+
+			"Use xmind_search_topics for substring or cross-sheet search.",
 	),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
-	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet to search")),
+	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("title", mcp.Required(), mcp.Description("Exact topic title to find (non-empty)")),
+	mcp.WithString("parent_id", mcp.Description(
+		"Topic ID for the subtree root to search (omit or null for the entire sheet). "+
+			"Unlike parent_id on add/import tools, this does not designate a parent for new topics.",
+	)),
 )
 
 var toolAddTopic = mcp.NewTool(

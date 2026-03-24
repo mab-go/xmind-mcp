@@ -11,6 +11,9 @@ import (
 // Stable topic ID from kitchen-sink Sheet 1 (Mind Map): "Alpha" under Subtopic 1.
 const kitchenSinkAlphaTopicID = "169d72af-6345-47ad-90b0-5b587f1f9619"
 
+// Parent of "Alpha" on Sheet 1 - Mind Map.
+const kitchenSinkSubtopic1TopicID = "61cc4754-20ec-4479-9e58-f7eaa985520a"
+
 const kitchenSinkSheet10Title = "Sheet 10 - Topic Properties"
 
 // Topic IDs from internal/xmind/reader_test.go (Sheet 10 — Topic Properties).
@@ -126,8 +129,8 @@ func TestFindTopicKitchenSink(t *testing.T) {
 	if out.Title != "Alpha" {
 		t.Fatalf("title: got %q", out.Title)
 	}
-	if out.ID == "" {
-		t.Fatal("empty id")
+	if out.ID != kitchenSinkAlphaTopicID {
+		t.Fatalf("id: got %q want %q", out.ID, kitchenSinkAlphaTopicID)
 	}
 }
 
@@ -404,6 +407,126 @@ func TestFindTopicEmptyTitle(t *testing.T) {
 	})
 	if !res.IsError {
 		t.Fatal("expected tool error for empty title")
+	}
+}
+
+func TestFindTopicParentIDWrongType(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.FindTopic, map[string]any{
+		"path":      kitchenSinkPath(t),
+		"sheet_id":  sheetID,
+		"title":     "Alpha",
+		"parent_id": 123,
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for non-string parent_id")
+	}
+	if !strings.Contains(textContent(t, res), "expected a string") {
+		t.Fatalf("error text: %s", textContent(t, res))
+	}
+}
+
+func TestFindTopicParentIDEmptyString(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.FindTopic, map[string]any{
+		"path":      kitchenSinkPath(t),
+		"sheet_id":  sheetID,
+		"title":     "Alpha",
+		"parent_id": "",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for empty parent_id")
+	}
+	if !strings.Contains(textContent(t, res), "non-empty string") {
+		t.Fatalf("error text: %s", textContent(t, res))
+	}
+}
+
+func TestFindTopicParentIDUnknown(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.FindTopic, map[string]any{
+		"path":      kitchenSinkPath(t),
+		"sheet_id":  sheetID,
+		"title":     "Alpha",
+		"parent_id": "00000000-0000-0000-0000-000000000000",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for unknown parent_id")
+	}
+	if !strings.Contains(textContent(t, res), "topic not found") {
+		t.Fatalf("error text: %s", textContent(t, res))
+	}
+}
+
+// "Central Topic" exists only as the sheet root; it is not under Subtopic 1's subtree.
+func TestFindTopicScopedTitleNotUnderParent(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.FindTopic, map[string]any{
+		"path":      kitchenSinkPath(t),
+		"sheet_id":  sheetID,
+		"title":     "Central Topic",
+		"parent_id": kitchenSinkSubtopic1TopicID,
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error when title exists on sheet but not under parent_id scope")
+	}
+	if !strings.Contains(textContent(t, res), "no topic with title") {
+		t.Fatalf("error text: %s", textContent(t, res))
+	}
+}
+
+func TestFindTopicScopedDescendant(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.FindTopic, map[string]any{
+		"path":      kitchenSinkPath(t),
+		"sheet_id":  sheetID,
+		"title":     "Alpha",
+		"parent_id": kitchenSinkSubtopic1TopicID,
+	})
+	if res.IsError {
+		t.Fatalf("FindTopic: %s", textContent(t, res))
+	}
+	var out findTopicResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ID != kitchenSinkAlphaTopicID {
+		t.Fatalf("id: got %q want %q", out.ID, kitchenSinkAlphaTopicID)
+	}
+	if out.ParentTitle != "Subtopic 1" {
+		t.Fatalf("parentTitle: got %q want Subtopic 1", out.ParentTitle)
+	}
+}
+
+func TestFindTopicParentIDSelfMatch(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.FindTopic, map[string]any{
+		"path":      kitchenSinkPath(t),
+		"sheet_id":  sheetID,
+		"title":     "Alpha",
+		"parent_id": kitchenSinkAlphaTopicID,
+	})
+	if res.IsError {
+		t.Fatalf("FindTopic: %s", textContent(t, res))
+	}
+	var out findTopicResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ID != kitchenSinkAlphaTopicID {
+		t.Fatalf("id: got %q want %q", out.ID, kitchenSinkAlphaTopicID)
+	}
+	if out.ParentTitle != "" {
+		t.Fatalf("parentTitle: got %q want empty (scope root matched)", out.ParentTitle)
+	}
+	if len(out.SiblingTitles) != 0 {
+		t.Fatalf("expected no siblingTitles when scope root matches, got %#v", out.SiblingTitles)
 	}
 }
 
