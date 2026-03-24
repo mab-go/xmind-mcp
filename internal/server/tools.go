@@ -142,14 +142,21 @@ var toolReorderChildren = mcp.NewTool(
 
 var toolSetTopicProperties = mcp.NewTool(
 	"xmind_set_topic_properties",
-	mcp.WithDescription("Set optional metadata on a topic: notes, labels, markers, link. Only provided fields are updated."),
+	mcp.WithDescription(
+		"Set optional metadata on a topic: notes, labels, markers, link, remove_markers. Only provided fields are updated. "+
+			"Clearing cheat sheet: notes use empty string or null to clear; link uses empty string to clear (omit the key or pass null to leave the link unchanged). "+
+			"labels or markers use an empty array to clear all. remove_markers is applied after markers when both are set; empty remove_markers removes nothing, "+
+			"unlike an empty markers array which clears all markers. "+
+			"Null semantics: only notes treats JSON null as clear; for labels, markers, remove_markers, and link, omit the key or pass null to leave that field unchanged.",
+	),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to update")),
-	mcp.WithString("notes", mcp.Description("Plain text note (plain + HTML fields set to the same string)")),
-	mcp.WithArray("labels", mcp.Description("List of label strings")),
-	mcp.WithArray("markers", mcp.Description(`Marker IDs, e.g. "priority-1", "task-done"`)),
-	mcp.WithString("link", mcp.Description("URL, file path, or topic link href")),
+	mcp.WithString("notes", mcp.Description("Plain text note (plain + HTML fields set); empty string or null clears notes (only this field uses null to clear)")),
+	mcp.WithArray("labels", mcp.Description("List of label strings; empty array clears all labels; omit or null leaves labels unchanged")),
+	mcp.WithArray("markers", mcp.Description(`Full marker ID list, e.g. "priority-1", "task-done"; empty array clears all markers; omit or null leaves markers unchanged`)),
+	mcp.WithArray("remove_markers", mcp.Description(`Marker IDs to remove after any markers replace; empty array removes nothing; omit or null leaves markers unchanged; applied after markers when both are set`)),
+	mcp.WithString("link", mcp.Description("URL, file path, or topic link href; empty string clears the link; omit or null leaves the link unchanged")),
 )
 
 var toolAddFloatingTopic = mcp.NewTool(

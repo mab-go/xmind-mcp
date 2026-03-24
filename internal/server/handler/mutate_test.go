@@ -512,7 +512,7 @@ func TestSetTopicProperties(t *testing.T) {
 		topic.Notes.RealHTML == nil || topic.Notes.RealHTML.Content != "<div>Note body</div>" {
 		t.Fatalf("notes: %+v", topic.Notes)
 	}
-	if len(topic.Labels) != 2 || topic.Labels[0] != "l1" {
+	if len(topic.Labels) != 2 || topic.Labels[0] != "l1" || topic.Labels[1] != "l2" {
 		t.Fatalf("labels: %v", topic.Labels)
 	}
 	if len(topic.Markers) != 1 || topic.Markers[0].MarkerID != "priority-1" {
@@ -719,6 +719,179 @@ func TestSetTopicPropertiesPartial(t *testing.T) {
 	}
 	if len(topic.Markers) != 1 || topic.Markers[0].MarkerID != "task-done" {
 		t.Fatalf("markers: %+v", topic.Markers)
+	}
+}
+
+func TestSetTopicPropertiesClearSemantics(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clearsem.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	tid := sheets[0].RootTopic.ID
+
+	res := callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid,
+		"notes": "keep", "labels": []any{"x"}, "markers": []any{"priority-1"}, "link": "https://a.example",
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid, "notes": "",
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	if sheets[0].RootTopic.Notes != nil {
+		t.Fatalf("notes empty string: want nil, got %+v", sheets[0].RootTopic.Notes)
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid,
+		"notes": "n2", "labels": []any{"y"}, "markers": []any{"task-done"}, "link": "https://b.example",
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid, "notes": nil,
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	if sheets[0].RootTopic.Notes != nil {
+		t.Fatalf("notes nil: want nil, got %+v", sheets[0].RootTopic.Notes)
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid, "labels": []any{},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	if len(sheets[0].RootTopic.Labels) != 0 {
+		t.Fatalf("labels: want empty, got %v", sheets[0].RootTopic.Labels)
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid, "markers": []any{},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	if len(sheets[0].RootTopic.Markers) != 0 {
+		t.Fatalf("markers: want empty, got %+v", sheets[0].RootTopic.Markers)
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid, "link": "",
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	if sheets[0].RootTopic.Href != "" {
+		t.Fatalf("link: want empty href, got %q", sheets[0].RootTopic.Href)
+	}
+}
+
+func TestSetTopicPropertiesRemoveMarkers(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rmmarkers.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	tid := sheets[0].RootTopic.ID
+
+	res := callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid,
+		"markers": []any{"priority-1", "task-done"},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid,
+		"remove_markers": []any{},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	m := sheets[0].RootTopic.Markers
+	if len(m) != 2 {
+		t.Fatalf("empty remove_markers: want two markers, got %+v", m)
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid,
+		"remove_markers": []any{"unknown-id"},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	m = sheets[0].RootTopic.Markers
+	if len(m) != 2 {
+		t.Fatalf("unknown remove id: want two markers, got %+v", m)
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid,
+		"remove_markers": []any{"priority-1"},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	m = sheets[0].RootTopic.Markers
+	if len(m) != 1 || m[0].MarkerID != "task-done" {
+		t.Fatalf("partial remove: want [task-done], got %+v", m)
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid,
+		"markers": []any{},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	if len(sheets[0].RootTopic.Markers) != 0 {
+		t.Fatalf("markers empty array: want no markers, got %+v", sheets[0].RootTopic.Markers)
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid,
+		"remove_markers": []any{"still-unknown"},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	if len(sheets[0].RootTopic.Markers) != 0 {
+		t.Fatalf("remove_markers with no markers: want empty, got %+v", sheets[0].RootTopic.Markers)
+	}
+
+	res = callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": tid,
+		"markers": []any{"a", "b"}, "remove_markers": []any{"a"},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	m = sheets[0].RootTopic.Markers
+	if len(m) != 1 || m[0].MarkerID != "b" {
+		t.Fatalf("markers then remove: want [b], got %+v", m)
 	}
 }
 
@@ -1178,6 +1351,72 @@ func TestSetTopicPropertiesMissingTopicID(t *testing.T) {
 	})
 	if !res.IsError {
 		t.Fatal("expected error when topic_id is missing")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "topic_id") {
+		t.Fatalf("expected topic_id in error message, got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesNotesWrongType(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "noteswrong.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	tid := sheets[0].RootTopic.ID
+	res := callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sheets[0].ID, "topic_id": tid,
+		"notes": float64(42),
+	})
+	if !res.IsError {
+		t.Fatal("expected error when notes is not a string")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "invalid argument notes") {
+		t.Fatalf("expected invalid argument notes in message, got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesMarkersWrongType(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mkwrong.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	tid := sheets[0].RootTopic.ID
+	res := callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sheets[0].ID, "topic_id": tid,
+		"markers": "not-an-array",
+	})
+	if !res.IsError {
+		t.Fatal("expected error when markers is not an array")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "invalid argument markers") {
+		t.Fatalf("expected invalid argument markers in message, got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesMultilineNoteHTML(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mlnote.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	tid := sheets[0].RootTopic.ID
+	res := callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sheets[0].ID, "topic_id": tid,
+		"notes": "a\nb",
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	n := sheets[0].RootTopic.Notes
+	want := "<div>a</div><div>b</div>"
+	if n == nil || n.RealHTML == nil || n.RealHTML.Content != want {
+		t.Fatalf("multiline RealHTML: want %q, got %+v", want, n)
 	}
 }
 
