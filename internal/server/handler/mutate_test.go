@@ -3,6 +3,7 @@ package handler
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -777,6 +778,81 @@ func TestAddRelationship(t *testing.T) {
 	rel := sh.Relationships[0]
 	if rel.End1ID != aID || rel.End2ID != bID || rel.Title != "relates" {
 		t.Fatalf("unexpected relationship: %+v", rel)
+	}
+}
+
+func TestDeleteRelationship(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "delrel.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	rid := sheets[0].RootTopic.ID
+	aID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "A",
+	})), "added topic id ")
+	bID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "B",
+	})), "added topic id ")
+
+	res := callTool(t, h.AddRelationship, map[string]any{
+		"path": path, "sheet_id": sid, "from_id": aID, "to_id": bID,
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	sh := &sheets[0]
+	if len(sh.Relationships) != 1 {
+		t.Fatalf("expected 1 relationship, got %+v", sh.Relationships)
+	}
+	relID := sh.Relationships[0].ID
+
+	res = callTool(t, h.DeleteRelationship, map[string]any{
+		"path": path, "sheet_id": sid, "relationship_id": relID,
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	if got, want := textContent(t, res), fmt.Sprintf("deleted relationship id %s", relID); got != want {
+		t.Fatalf("success text: got %q want %q", got, want)
+	}
+	sheets, _ = xmind.ReadMap(path)
+	if len(sheets[0].Relationships) != 0 {
+		t.Fatalf("expected 0 relationships after delete, got %+v", sheets[0].Relationships)
+	}
+}
+
+func TestDeleteRelationshipNotFound(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "delrel_nf.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	res := callTool(t, h.DeleteRelationship, map[string]any{
+		"path": path, "sheet_id": sid, "relationship_id": "00000000-0000-0000-0000-000000000001",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error when relationship_id missing on sheet")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "relationship not found on sheet") || !strings.Contains(msg, sid) {
+		t.Fatalf("unexpected error: %q", msg)
+	}
+}
+
+func TestDeleteRelationshipInvalidSheetID(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "delrel_bad_sheet.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	res := callTool(t, h.DeleteRelationship, map[string]any{
+		"path": path, "sheet_id": "00000000-0000-0000-0000-000000000000", "relationship_id": "00000000-0000-0000-0000-000000000001",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for unknown sheet_id")
 	}
 }
 

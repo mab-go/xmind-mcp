@@ -162,6 +162,26 @@ var toolAddRelationship = mcp.NewTool(
 	mcp.WithString("label", mcp.Description("Optional label on the connector")),
 )
 
+var toolListRelationships = mcp.NewTool(
+	"xmind_list_relationships",
+	mcp.WithDescription(
+		"List all sheet-level relationships as JSON: sheetId, relationshipCount, and relationships (endpoint ids, "+
+			"titles, optional connector title).",
+	),
+	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
+	mcp.WithString("sheet_id", mcp.Required(), mcp.Description(
+		"Sheet to read. Each item's end1Id/end2Id correspond to from_id/to_id on xmind_add_relationship; optional title matches the add tool's label.",
+	)),
+)
+
+var toolDeleteRelationship = mcp.NewTool(
+	"xmind_delete_relationship",
+	mcp.WithDescription("Remove a sheet-level relationship by id (from xmind_list_relationships)."),
+	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
+	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet containing the relationship")),
+	mcp.WithString("relationship_id", mcp.Required(), mcp.Description("ID of the relationship to delete")),
+)
+
 var toolAddSummary = mcp.NewTool(
 	"xmind_add_summary",
 	mcp.WithDescription("Add a summary callout spanning a range of sibling attached children (double-write to children.summary and summaries)."),

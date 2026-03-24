@@ -253,3 +253,107 @@ func TestDeleteLastSheetError(t *testing.T) {
 		t.Fatal("expected tool error when deleting last sheet")
 	}
 }
+
+func TestListRelationshipsKitchenSink(t *testing.T) {
+	h := NewXMindHandler()
+	res := callTool(t, h.ListRelationships, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": kitchenSinkRelationshipsSheetID,
+	})
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", textContent(t, res))
+	}
+	var out listRelationshipsResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.SheetID != kitchenSinkRelationshipsSheetID {
+		t.Fatalf("sheetId: got %q want %q", out.SheetID, kitchenSinkRelationshipsSheetID)
+	}
+	const wantRelCount = 2 // kitchen-sink Sheet 12 (kitchenSinkRelationshipsSheetID)
+	if out.RelationshipCount != wantRelCount || len(out.Relationships) != wantRelCount {
+		t.Fatalf("relationshipCount/relationships: got count=%d len=%d want %d", out.RelationshipCount, len(out.Relationships), wantRelCount)
+	}
+	if len(out.Relationships) != out.RelationshipCount {
+		t.Fatalf("relationships len %d vs relationshipCount %d", len(out.Relationships), out.RelationshipCount)
+	}
+	foundNonEmpty := false
+	for _, r := range out.Relationships {
+		if r.End1Title != "" && r.End2Title != "" {
+			foundNonEmpty = true
+			break
+		}
+	}
+	if !foundNonEmpty {
+		t.Fatal("expected at least one relationship with non-empty end1Title and end2Title")
+	}
+	sheets, err := xmind.ReadMap(kitchenSinkPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sh *xmind.Sheet
+	for i := range sheets {
+		if sheets[i].ID == kitchenSinkRelationshipsSheetID {
+			sh = &sheets[i]
+			break
+		}
+	}
+	if sh == nil {
+		t.Fatal("sheet not found in kitchen sink")
+	}
+	if len(sh.Relationships) != len(out.Relationships) {
+		t.Fatalf("ReadMap rel count %d vs list %d", len(sh.Relationships), len(out.Relationships))
+	}
+	id0 := sh.Relationships[0].ID
+	var got *listRelationshipsItem
+	for i := range out.Relationships {
+		if out.Relationships[i].ID == id0 {
+			got = &out.Relationships[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("list output missing relationship id %s", id0)
+	}
+	if got.End1ID != sh.Relationships[0].End1ID || got.End2ID != sh.Relationships[0].End2ID {
+		t.Fatalf("endpoint ids: got %+v want End1=%q End2=%q", got, sh.Relationships[0].End1ID, sh.Relationships[0].End2ID)
+	}
+}
+
+func TestListRelationshipsEmptySheet(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "emptyrel.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := sheets[0].ID
+	res := callTool(t, h.ListRelationships, map[string]any{"path": path, "sheet_id": sid})
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", textContent(t, res))
+	}
+	var out listRelationshipsResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.RelationshipCount != 0 || len(out.Relationships) != 0 {
+		t.Fatalf("want empty relationships, got count=%d len=%d", out.RelationshipCount, len(out.Relationships))
+	}
+	raw := textContent(t, res)
+	if !strings.Contains(raw, `"relationships":[]`) {
+		t.Fatalf("expected explicit empty relationships array in JSON: %s", raw)
+	}
+}
+
+func TestListRelationshipsInvalidSheetID(t *testing.T) {
+	h := NewXMindHandler()
+	res := callTool(t, h.ListRelationships, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": "00000000-0000-0000-0000-000000000000",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for unknown sheet_id")
+	}
+}

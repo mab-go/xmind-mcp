@@ -884,6 +884,47 @@ func (h *XMindHandler) AddRelationship(ctx context.Context, req mcp.CallToolRequ
 	return textResult(fmt.Sprintf("added relationship id %s", relID)), nil
 }
 
+// DeleteRelationship removes a sheet-level relationship by id.
+func (h *XMindHandler) DeleteRelationship(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_ = ctx
+	args := req.GetArguments()
+	absPath, toolErr := absPathFromArgs(args)
+	if toolErr != nil {
+		return toolErr, nil
+	}
+	sheetID, terr := requireString(args, "sheet_id")
+	if terr != nil {
+		return terr, nil
+	}
+	relationshipID, terr := requireString(args, "relationship_id")
+	if terr != nil {
+		return terr, nil
+	}
+
+	sheets, toolErr2, err := statAndReadMap(absPath)
+	if err != nil {
+		return nil, err
+	}
+	if toolErr2 != nil {
+		return toolErr2, nil
+	}
+	sh := findSheetByID(sheets, sheetID)
+	if sh == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	}
+
+	idx := slices.IndexFunc(sh.Relationships, func(r xmind.Relationship) bool { return r.ID == relationshipID })
+	if idx < 0 {
+		return mcp.NewToolResultError(fmt.Sprintf("relationship not found on sheet %s: %s", sheetID, relationshipID)), nil
+	}
+	sh.Relationships = slices.Delete(sh.Relationships, idx, idx+1)
+	sh.RevisionID = uuid.New().String()
+	if err := xmind.WriteMap(absPath, sheets); err != nil {
+		return nil, fmt.Errorf("write map: %w", err)
+	}
+	return textResult(fmt.Sprintf("deleted relationship id %s", relationshipID)), nil
+}
+
 // AddSummary adds a summary topic and range descriptor on a parent (double-write).
 func (h *XMindHandler) AddSummary(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
