@@ -123,12 +123,12 @@ var toolDeleteTopic = mcp.NewTool(
 
 var toolMoveTopic = mcp.NewTool(
 	"xmind_move_topic",
-	mcp.WithDescription("Move a topic (and subtree) to a new parent as an attached child."),
+	mcp.WithDescription("Move a topic (and subtree) to a new parent as an attached child. Use position to control insertion order; omit to append at the end."),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to move")),
 	mcp.WithString("new_parent_id", mcp.Required(), mcp.Description("ID of the new parent topic")),
-	mcp.WithNumber("position", mcp.Description("Sibling index under new parent; omit to append")),
+	mcp.WithNumber("position", mcp.Description("Zero-based insertion index among the new parent's attached children (0 = first child); valid range is 0 to the current child count. Omit to append at end.")),
 )
 
 var toolReorderChildren = mcp.NewTool(

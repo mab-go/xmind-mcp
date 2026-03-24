@@ -128,7 +128,7 @@ etc.)—see each row.
 | `xmind_add_topics_bulk`      | Add multiple topics (flat list or nested subtree) under a parent in one call. |
 | `xmind_rename_topic`         | Change the title of an existing topic.                                        |
 | `xmind_delete_topic`         | Remove a topic and all its descendants.                                       |
-| `xmind_move_topic`           | Reparent a topic (and its subtree) to a new parent.                           |
+| `xmind_move_topic`           | Move a topic (and subtree) to a new parent; optional `position` sets insertion order (omit to append). |
 | `xmind_reorder_children`     | Change the order of a topic's children without reparenting.                   |
 | `xmind_set_topic_properties` | Set or update topic metadata (notes, labels, markers, link, remove_markers); clearing rules are on the tool. |
 | `xmind_add_floating_topic`   | Add a detached floating topic not connected to the main hierarchy.            |

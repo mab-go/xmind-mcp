@@ -604,7 +604,8 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 	if err := xmind.WriteMap(absPath, sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	return textResult(fmt.Sprintf("moved topic %s under %s", topicID, newParentID)), nil
+	n := len(newParent.Children.Attached)
+	return textResult(fmt.Sprintf("moved topic %s to position %d under %s (%d attached children)", topicID, moveInsertIdx, newParentID, n)), nil
 }
 
 // ReorderChildren reorders attached children of parent_id.
