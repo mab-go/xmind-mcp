@@ -66,21 +66,39 @@ func (h *XMindHandler) FlattenToOutline(ctx context.Context, req mcp.CallToolReq
 		start = &sh.RootTopic
 	}
 
+	includeNotes, berr := parseBoolOptional(args, "include_notes")
+	if berr != nil {
+		return berr, nil
+	}
+
 	var b strings.Builder
-	flattenTopicWrite(&b, start, 0, format)
+	flattenTopicWrite(&b, start, 0, format, includeNotes)
 	return textResult(strings.TrimRight(b.String(), "\n")), nil
 }
 
-func flattenTopicWrite(b *strings.Builder, t *xmind.Topic, depth int, format string) {
+func flattenTopicWrite(b *strings.Builder, t *xmind.Topic, depth int, format string, includeNotes bool) {
 	title := ""
+	plain := ""
 	if t != nil {
 		title = t.Title
+		plain = plainNoteContent(t)
 	}
+	hasNotes := includeNotes && plain != ""
+
 	switch format {
 	case "text":
 		b.WriteString(strings.Repeat(" ", depth*2))
 		b.WriteString(title)
 		b.WriteByte('\n')
+		if hasNotes {
+			noteIndent := strings.Repeat(" ", depth*2+4)
+			for _, line := range strings.Split(plain, "\n") {
+				b.WriteString(noteIndent)
+				b.WriteString("[note] ")
+				b.WriteString(line)
+				b.WriteByte('\n')
+			}
+		}
 	case "markdown":
 		// Use heading lines at every depth so import heading-mode parses the full tree (list lines would be ignored).
 		level := depth + 1
@@ -91,7 +109,14 @@ func flattenTopicWrite(b *strings.Builder, t *xmind.Topic, depth int, format str
 		b.WriteString(" ")
 		b.WriteString(title)
 		b.WriteByte('\n')
-		if depth == 0 {
+		if hasNotes {
+			for _, line := range strings.Split(plain, "\n") {
+				b.WriteString("> ")
+				b.WriteString(line)
+				b.WriteByte('\n')
+			}
+			b.WriteByte('\n')
+		} else if depth == 0 {
 			b.WriteByte('\n')
 		}
 	}
@@ -99,7 +124,7 @@ func flattenTopicWrite(b *strings.Builder, t *xmind.Topic, depth int, format str
 		return
 	}
 	for i := range t.Children.Attached {
-		flattenTopicWrite(b, &t.Children.Attached[i], depth+1, format)
+		flattenTopicWrite(b, &t.Children.Attached[i], depth+1, format, includeNotes)
 	}
 }
 

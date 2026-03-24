@@ -119,6 +119,68 @@ func TestFlattenToOutlineInvalidFormat(t *testing.T) {
 	}
 }
 
+func TestFlattenToOutlineIncludeNotesMarkdown(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "notes-md.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	rid := sheets[0].RootTopic.ID
+	callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": rid, "notes": "Line1\nLine2",
+	})
+	res := callTool(t, h.FlattenToOutline, map[string]any{
+		"path": path, "sheet_id": sid, "format": "markdown", "include_notes": true,
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	out := textContent(t, res)
+	want := "# R\n> Line1\n> Line2"
+	if out != want {
+		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestFlattenToOutlineIncludeNotesText(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "notes-txt.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	rid := sheets[0].RootTopic.ID
+	callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": rid, "notes": "Line1\nLine2",
+	})
+	res := callTool(t, h.FlattenToOutline, map[string]any{
+		"path": path, "sheet_id": sid, "format": "text", "include_notes": true,
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	out := textContent(t, res)
+	want := "R\n    [note] Line1\n    [note] Line2"
+	if out != want {
+		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestFlattenToOutlineInvalidIncludeNotesType(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad-notes.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	res := callTool(t, h.FlattenToOutline, map[string]any{
+		"path": path, "sheet_id": sheets[0].ID, "include_notes": "yes",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for non-boolean include_notes")
+	}
+}
+
 func TestImportFromOutlineHeadingMode(t *testing.T) {
 	h := NewXMindHandler()
 	dir := t.TempDir()
