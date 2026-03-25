@@ -9,7 +9,7 @@
 
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for
 reading and writing local [XMind](https://xmind.com) mind map files. XMind MCP
-exposes 25 tools that let any MCP-compatible AI client create, navigate, and
+exposes 26 tools that let any MCP-compatible AI client create, navigate, and
 edit `.xmind` files directly on disk.
 
 <p align="center">
@@ -95,14 +95,14 @@ environments.
 
 ### Tier 1: File & Sheet Management
 
-| Tool                 | Description                                                                                    |
-|----------------------|------------------------------------------------------------------------------------------------|
-| `xmind_open_map`     | Parse a `.xmind` file and return a structural summary (sheet names, root topics, node counts). |
-| `xmind_list_sheets`  | Return the names and IDs of all sheets in a workbook.                                          |
-| `xmind_create_map`   | Create a new `.xmind` file with a single sheet and root topic.                                 |
-| `xmind_add_sheet`    | Add a new sheet to an existing workbook.                                                       |
-| `xmind_delete_sheet` | Remove a sheet from a workbook.                                                                |
-| `xmind_list_relationships` | List all relationships on a sheet (endpoint ids and topic titles as JSON).               |
+| Tool                       | Description                                                                                    |
+|----------------------------|------------------------------------------------------------------------------------------------|
+| `xmind_open_map`           | Parse a `.xmind` file and return a structural summary (sheet names, root topics, node counts). |
+| `xmind_list_sheets`        | Return the names and IDs of all sheets in a workbook.                                          |
+| `xmind_create_map`         | Create a new `.xmind` file with a single sheet and root topic.                                 |
+| `xmind_add_sheet`          | Add a new sheet to an existing workbook.                                                       |
+| `xmind_delete_sheet`       | Remove a sheet from a workbook.                                                                |
+| `xmind_list_relationships` | List all relationships on a sheet (endpoint ids and topic titles as JSON).                     |
 
 ### Tier 2: Finding Topics
 
@@ -110,12 +110,12 @@ Use these to resolve topic ids and titles before editing a specific branch
 of the tree. Some write tools instead need sheet-level ids or ids from
 `xmind_list_relationships`—see each tool’s description.
 
-| Tool                         | Description                                                                       |
-|------------------------------|-----------------------------------------------------------------------------------|
-| `xmind_get_subtree`          | Return the full topic hierarchy rooted at a given topic (or the whole sheet).     |
+| Tool                         | Description                                                                                                                               |
+|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `xmind_get_subtree`          | Return the full topic hierarchy rooted at a given topic (or the whole sheet).                                                             |
 | `xmind_get_topic_properties` | Return one topic's metadata as JSON (notes, markers, boundaries, sheet relationships for that topic, child counts); use to verify writes. |
-| `xmind_search_topics`        | Search for topics by keyword; returns matching topics with their IDs and context. |
-| `xmind_find_topic`         | Find a single topic by exact title; returns its ID and immediate context.         |
+| `xmind_search_topics`        | Search for topics by keyword; returns matching topics with their IDs and context.                                                         |
+| `xmind_find_topic`           | Find a single topic by exact title; returns its ID and immediate context.                                                                 |
 
 ### Tier 3: Topic Mutations
 
@@ -123,20 +123,21 @@ Most tools here target a topic and take a `topic_id` from Tier 2 (or from
 prior results). A few use other ids (`from_id`/`to_id`, `relationship_id`,
 etc.)—see each row.
 
-| Tool                         | Description                                                                   |
-|------------------------------|-------------------------------------------------------------------------------|
-| `xmind_add_topic`            | Add a new child topic under a specified parent.                               |
-| `xmind_add_topics_bulk`      | Add multiple topics (flat list or nested subtree) under a parent in one call. |
-| `xmind_rename_topic`         | Change the title of an existing topic.                                        |
-| `xmind_delete_topic`         | Remove a topic and all its descendants.                                       |
-| `xmind_move_topic`           | Move a topic (and subtree) to a new parent; optional `position` sets insertion order (omit to append). |
-| `xmind_reorder_children`     | Change the order of a topic's children without reparenting.                   |
+| Tool                         | Description                                                                                                  |
+|------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `xmind_add_topic`            | Add a new child topic under a specified parent.                                                              |
+| `xmind_add_topics_bulk`      | Add multiple topics (flat list or nested subtree) under a parent in one call.                                |
+| `xmind_duplicate_topic`      | Deep-clone a topic subtree under another parent (same sheet); sheet relationships are not copied.            |
+| `xmind_rename_topic`         | Change the title of an existing topic.                                                                       |
+| `xmind_delete_topic`         | Remove a topic and all its descendants.                                                                      |
+| `xmind_move_topic`           | Move a topic (and subtree) to a new parent; optional `position` sets insertion order (omit to append).       |
+| `xmind_reorder_children`     | Change the order of a topic's children without reparenting.                                                  |
 | `xmind_set_topic_properties` | Set or update topic metadata (notes, labels, markers, link, remove_markers); clearing rules are on the tool. |
-| `xmind_add_floating_topic`   | Add a detached floating topic not connected to the main hierarchy.            |
-| `xmind_add_relationship`     | Draw a labeled connector between any two topics.                              |
-| `xmind_delete_relationship`  | Remove a relationship by id (from `xmind_list_relationships`).                |
-| `xmind_add_summary`          | Add a summary callout bracketing a range of sibling topics.                   |
-| `xmind_add_boundary`         | Add a visual boundary enclosure around all children of a topic.               |
+| `xmind_add_floating_topic`   | Add a detached floating topic not connected to the main hierarchy.                                           |
+| `xmind_add_relationship`     | Draw a labeled connector between any two topics.                                                             |
+| `xmind_delete_relationship`  | Remove a relationship by id (from `xmind_list_relationships`).                                               |
+| `xmind_add_summary`          | Add a summary callout bracketing a range of sibling topics.                                                  |
+| `xmind_add_boundary`         | Add a visual boundary enclosure around all children of a topic.                                              |
 
 ### Tier 4: Utilities
 

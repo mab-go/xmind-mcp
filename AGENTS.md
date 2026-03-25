@@ -25,6 +25,7 @@ internal/
     hooks.go              — MCP lifecycle hooks (before/after initialize)
     handler/
       handler.go          — XMindHandler struct and shared utilities (textResult, etc.)
+      handler_test.go     — tests for handler helpers (e.g. deepCloneTopic)
       sheets.go           — handlers for Tier 1: file & sheet management tools
       find.go             — handlers for Tier 2: search/find tools
       mutate.go           — handlers for Tier 3: topic mutation tools
@@ -180,6 +181,7 @@ func textResult(text string) *mcp.CallToolResult {
 | `findParentOfTopic(root, targetID)` | Parent topic, child index, and list name (`"attached"`, `"detached"`, `"summary"`) |
 | `isDescendantOf(ancestor, descendantID)` | Reports whether a node is the ancestor or any node in its subtree |
 | `countTopics(t)` | Total node count for a subtree (self + all descendants) |
+| `deepCloneTopic(root)` | JSON round-trip clone of a subtree, then fresh UUIDs for topics and summary/boundary descriptors |
 
 ### Logging
 

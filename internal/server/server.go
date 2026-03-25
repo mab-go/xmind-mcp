@@ -39,6 +39,7 @@ func newXMindServer(ctx context.Context, h *handler.XMindHandler) *mcpserver.MCP
 	s.AddTool(toolFindTopic, h.FindTopic)
 	s.AddTool(toolAddTopic, h.AddTopic)
 	s.AddTool(toolAddTopicsBulk, h.AddTopicsBulk)
+	s.AddTool(toolDuplicateTopic, h.DuplicateTopic)
 	s.AddTool(toolRenameTopic, h.RenameTopic)
 	s.AddTool(toolDeleteTopic, h.DeleteTopic)
 	s.AddTool(toolMoveTopic, h.MoveTopic)

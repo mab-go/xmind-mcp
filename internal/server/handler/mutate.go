@@ -375,6 +375,80 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 	return textResult(fmt.Sprintf("added topic id %s", topic.ID)), nil
 }
 
+// DuplicateTopic deep-clones a topic subtree and attaches it as an attached child of target_parent_id.
+func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_ = ctx
+	args := req.GetArguments()
+	absPath, toolErr := absPathFromArgs(args)
+	if toolErr != nil {
+		return toolErr, nil
+	}
+	sheetID, terr := requireString(args, "sheet_id")
+	if terr != nil {
+		return terr, nil
+	}
+	topicID, terr := requireString(args, "topic_id")
+	if terr != nil {
+		return terr, nil
+	}
+	targetParentID, terr := requireString(args, "target_parent_id")
+	if terr != nil {
+		return terr, nil
+	}
+	pos, perr := parsePositionOptional(args["position"])
+	if perr != nil {
+		return perr, nil
+	}
+
+	sheets, toolErr2, err := statAndReadMap(absPath)
+	if err != nil {
+		return nil, err
+	}
+	if toolErr2 != nil {
+		return toolErr2, nil
+	}
+	sh := findSheetByID(sheets, sheetID)
+	if sh == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	}
+	source := findTopicByID(&sh.RootTopic, topicID)
+	if source == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("source topic not found: %s", topicID)), nil
+	}
+	targetParent := findTopicByID(&sh.RootTopic, targetParentID)
+	if targetParent == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("target parent not found: %s", targetParentID)), nil
+	}
+
+	clone, err := deepCloneTopic(source)
+	if err != nil {
+		return nil, fmt.Errorf("duplicate topic: %w", err)
+	}
+	newRootID := clone.ID
+	n := countTopics(&clone)
+
+	if terr := insertAttached(targetParent, clone, pos); terr != nil {
+		return terr, nil
+	}
+	insertIdx := 0
+	if pos == nil {
+		insertIdx = len(targetParent.Children.Attached) - 1
+	} else {
+		insertIdx = *pos
+	}
+	if len(targetParent.Summaries) > 0 {
+		adjustSummariesAfterAttachedInsert(targetParent, insertIdx)
+	}
+	sh.RevisionID = uuid.New().String()
+	if err := xmind.WriteMap(absPath, sheets); err != nil {
+		return nil, fmt.Errorf("write map: %w", err)
+	}
+	return textResult(fmt.Sprintf(
+		"duplicated topic %s as %s under %s (%d topics copied)",
+		topicID, newRootID, targetParentID, n,
+	)), nil
+}
+
 // AddTopicsBulk adds a nested tree under parent_id.
 func (h *XMindHandler) AddTopicsBulk(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
