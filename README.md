@@ -9,7 +9,7 @@
 
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for
 reading and writing local [XMind](https://xmind.com) mind map files. XMind MCP
-exposes 24 tools that let any MCP-compatible AI client create, navigate, and
+exposes 25 tools that let any MCP-compatible AI client create, navigate, and
 edit `.xmind` files directly on disk.
 
 <p align="center">
@@ -110,11 +110,12 @@ Use these to resolve topic ids and titles before editing a specific branch
 of the tree. Some write tools instead need sheet-level ids or ids from
 `xmind_list_relationships`—see each tool’s description.
 
-| Tool                  | Description                                                                       |
-|-----------------------|-----------------------------------------------------------------------------------|
-| `xmind_get_subtree`   | Return the full topic hierarchy rooted at a given topic (or the whole sheet).     |
-| `xmind_search_topics` | Search for topics by keyword; returns matching topics with their IDs and context. |
-| `xmind_find_topic`    | Find a single topic by exact title; returns its ID and immediate context.         |
+| Tool                         | Description                                                                       |
+|------------------------------|-----------------------------------------------------------------------------------|
+| `xmind_get_subtree`          | Return the full topic hierarchy rooted at a given topic (or the whole sheet).     |
+| `xmind_get_topic_properties` | Return one topic's metadata as JSON (notes, markers, boundaries, sheet relationships for that topic, child counts); use to verify writes. |
+| `xmind_search_topics`        | Search for topics by keyword; returns matching topics with their IDs and context. |
+| `xmind_find_topic`         | Find a single topic by exact title; returns its ID and immediate context.         |
 
 ### Tier 3: Topic Mutations
 
