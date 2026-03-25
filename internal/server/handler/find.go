@@ -457,3 +457,168 @@ func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (
 	}
 	return textResult(string(out)), nil
 }
+
+// topicPropertiesResponse is the JSON shape for xmind_get_topic_properties.
+type topicPropertiesResponse struct {
+	ID             string                        `json:"id"`
+	Title          string                        `json:"title,omitempty"`
+	StructureClass string                        `json:"structureClass,omitempty"`
+	Labels         []string                      `json:"labels,omitempty"`
+	Markers        []xmind.Marker                `json:"markers,omitempty"`
+	Notes          string                        `json:"notes,omitempty"`
+	Href           string                        `json:"href,omitempty"`
+	ImageSrc       string                        `json:"imageSrc,omitempty"`
+	Position       *topicPropertiesPosition      `json:"position,omitempty"`
+	BoundaryCount  int                           `json:"boundaryCount,omitempty"`
+	Boundaries     []topicPropertiesBoundary     `json:"boundaries,omitempty"`
+	SummaryCount   int                           `json:"summaryCount,omitempty"`
+	Relationships  []topicPropertiesRelationship `json:"relationships,omitempty"`
+	ChildCounts    *topicPropertiesChildCounts   `json:"childCounts,omitempty"`
+}
+
+type topicPropertiesPosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type topicPropertiesBoundary struct {
+	ID    string `json:"id"`
+	Range string `json:"range"`
+	Title string `json:"title,omitempty"`
+}
+
+type topicPropertiesRelationship struct {
+	ID     string `json:"id"`
+	End1ID string `json:"end1Id"`
+	End2ID string `json:"end2Id"`
+	Title  string `json:"title,omitempty"`
+}
+
+type topicPropertiesChildCounts struct {
+	Attached int `json:"attached,omitempty"`
+	Detached int `json:"detached,omitempty"`
+	Summary  int `json:"summary,omitempty"`
+}
+
+func topicPropertiesResponseFrom(sh *xmind.Sheet, topic *xmind.Topic) topicPropertiesResponse {
+	if topic == nil {
+		return topicPropertiesResponse{}
+	}
+	out := topicPropertiesResponse{
+		ID:             topic.ID,
+		Title:          topic.Title,
+		StructureClass: topic.StructureClass,
+	}
+	if len(topic.Labels) > 0 {
+		out.Labels = append([]string(nil), topic.Labels...)
+	}
+	if len(topic.Markers) > 0 {
+		out.Markers = append([]xmind.Marker(nil), topic.Markers...)
+	}
+	if plain := plainNoteContent(topic); plain != "" {
+		out.Notes = plain
+	}
+	if topic.Href != "" {
+		out.Href = topic.Href
+	}
+	if topic.Image != nil && topic.Image.Src != "" {
+		out.ImageSrc = topic.Image.Src
+	}
+	if topic.Position != nil {
+		out.Position = &topicPropertiesPosition{X: topic.Position.X, Y: topic.Position.Y}
+	}
+	if n := len(topic.Boundaries); n > 0 {
+		out.BoundaryCount = n
+		out.Boundaries = make([]topicPropertiesBoundary, 0, n)
+		for i := range topic.Boundaries {
+			b := &topic.Boundaries[i]
+			out.Boundaries = append(out.Boundaries, topicPropertiesBoundary{
+				ID:    b.ID,
+				Range: b.Range,
+				Title: b.Title,
+			})
+		}
+	}
+	if sc := len(topic.Summaries); sc > 0 {
+		out.SummaryCount = sc
+	}
+	if sh != nil && len(sh.Relationships) > 0 {
+		for i := range sh.Relationships {
+			rel := &sh.Relationships[i]
+			if rel.End1ID != topic.ID && rel.End2ID != topic.ID {
+				continue
+			}
+			item := topicPropertiesRelationship{
+				ID:     rel.ID,
+				End1ID: rel.End1ID,
+				End2ID: rel.End2ID,
+			}
+			if rel.Title != "" {
+				item.Title = rel.Title
+			}
+			out.Relationships = append(out.Relationships, item)
+		}
+	}
+	if topic.Children != nil {
+		a := len(topic.Children.Attached)
+		d := len(topic.Children.Detached)
+		s := len(topic.Children.Summary)
+		if a > 0 || d > 0 || s > 0 {
+			cc := &topicPropertiesChildCounts{}
+			if a > 0 {
+				cc.Attached = a
+			}
+			if d > 0 {
+				cc.Detached = d
+			}
+			if s > 0 {
+				cc.Summary = s
+			}
+			out.ChildCounts = cc
+		}
+	}
+	return out
+}
+
+// GetTopicProperties returns JSON with a single topic's metadata for verification after writes.
+func (h *XMindHandler) GetTopicProperties(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_ = ctx
+	args := req.GetArguments()
+	absPath, toolErr := absPathFromArgs(args)
+	if toolErr != nil {
+		return toolErr, nil
+	}
+	sheetID, terr := requireString(args, "sheet_id")
+	if terr != nil {
+		return terr, nil
+	}
+	topicID, terr := requireString(args, "topic_id")
+	if terr != nil {
+		return terr, nil
+	}
+
+	sheets, toolErr2, err := statAndReadMap(absPath)
+	if err != nil {
+		return nil, err
+	}
+	if toolErr2 != nil {
+		return toolErr2, nil
+	}
+
+	sh := findSheetByID(sheets, sheetID)
+	if sh == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	}
+
+	t := findTopicByID(&sh.RootTopic, topicID)
+	if t == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
+	}
+
+	resp := topicPropertiesResponseFrom(sh, t)
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("marshal get_topic_properties response: %w", err)
+	}
+	return textResult(string(out)), nil
+}

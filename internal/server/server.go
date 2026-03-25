@@ -34,6 +34,7 @@ func newXMindServer(ctx context.Context, h *handler.XMindHandler) *mcpserver.MCP
 	s.AddTool(toolAddSheet, h.AddSheet)
 	s.AddTool(toolDeleteSheet, h.DeleteSheet)
 	s.AddTool(toolGetSubtree, h.GetSubtree)
+	s.AddTool(toolGetTopicProperties, h.GetTopicProperties)
 	s.AddTool(toolSearchTopics, h.SearchTopics)
 	s.AddTool(toolFindTopic, h.FindTopic)
 	s.AddTool(toolAddTopic, h.AddTopic)

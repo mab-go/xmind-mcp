@@ -712,3 +712,247 @@ func TestGetSubtreeDepthWithIncludeFlags(t *testing.T) {
 		t.Fatal("expected children at depth 1")
 	}
 }
+
+func TestGetTopicPropertiesSheet10NotesHrefStructureClass(t *testing.T) {
+	h := NewXMindHandler()
+	sid := kitchenSinkSheetIDByTitle(t, kitchenSinkSheet10Title)
+
+	sheets, err := xmind.ReadMap(kitchenSinkPath(t))
+	if err != nil {
+		t.Fatalf("ReadMap: %v", err)
+	}
+	var rootID string
+	for i := range sheets {
+		if sheets[i].Title == kitchenSinkSheet10Title {
+			rootID = sheets[i].RootTopic.ID
+			break
+		}
+	}
+	if rootID == "" {
+		t.Fatal("sheet 10 not found")
+	}
+
+	resRoot := callTool(t, h.GetTopicProperties, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": sid,
+		"topic_id": rootID,
+	})
+	if resRoot.IsError {
+		t.Fatalf("GetTopicProperties: %s", textContent(t, resRoot))
+	}
+	var rootProps topicPropertiesResponse
+	if err := json.Unmarshal([]byte(textContent(t, resRoot)), &rootProps); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if rootProps.StructureClass != "org.xmind.ui.map.clockwise" {
+		t.Fatalf("structureClass: got %q", rootProps.StructureClass)
+	}
+
+	resNotes := callTool(t, h.GetTopicProperties, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": sid,
+		"topic_id": kitchenSinkSheet10NoteTopicID,
+	})
+	if resNotes.IsError {
+		t.Fatalf("GetTopicProperties: %s", textContent(t, resNotes))
+	}
+	var noteProps topicPropertiesResponse
+	if err := json.Unmarshal([]byte(textContent(t, resNotes)), &noteProps); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.HasPrefix(noteProps.Notes, "This is a simple, plain text note") {
+		t.Fatalf("notes: %q", noteProps.Notes)
+	}
+
+	resHref := callTool(t, h.GetTopicProperties, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": sid,
+		"topic_id": kitchenSinkSheet10HrefTopicID,
+	})
+	if resHref.IsError {
+		t.Fatalf("GetTopicProperties: %s", textContent(t, resHref))
+	}
+	var hrefProps topicPropertiesResponse
+	if err := json.Unmarshal([]byte(textContent(t, resHref)), &hrefProps); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if hrefProps.Href != "https://www.google.com" {
+		t.Fatalf("href: %q", hrefProps.Href)
+	}
+}
+
+func TestGetTopicPropertiesRelationshipsFiltered(t *testing.T) {
+	h := NewXMindHandler()
+	path := kitchenSinkPath(t)
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatalf("ReadMap: %v", err)
+	}
+	var sh *xmind.Sheet
+	for i := range sheets {
+		if sheets[i].ID == kitchenSinkRelationshipsSheetID {
+			sh = &sheets[i]
+			break
+		}
+	}
+	if sh == nil {
+		t.Fatal("relationships sheet not found")
+	}
+	if len(sh.Relationships) == 0 {
+		t.Fatal("expected at least one relationship on kitchen-sink relationships sheet")
+	}
+	end1 := sh.Relationships[0].End1ID
+	var wantCount int
+	for i := range sh.Relationships {
+		r := &sh.Relationships[i]
+		if r.End1ID == end1 || r.End2ID == end1 {
+			wantCount++
+		}
+	}
+
+	res := callTool(t, h.GetTopicProperties, map[string]any{
+		"path":     path,
+		"sheet_id": kitchenSinkRelationshipsSheetID,
+		"topic_id": end1,
+	})
+	if res.IsError {
+		t.Fatalf("GetTopicProperties: %s", textContent(t, res))
+	}
+	var out topicPropertiesResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out.Relationships) != wantCount {
+		t.Fatalf("relationships: got %d want %d", len(out.Relationships), wantCount)
+	}
+	byID := make(map[string]topicPropertiesRelationship, len(out.Relationships))
+	for _, r := range out.Relationships {
+		byID[r.ID] = r
+	}
+	for i := range sh.Relationships {
+		r := &sh.Relationships[i]
+		if r.End1ID != end1 && r.End2ID != end1 {
+			continue
+		}
+		got, ok := byID[r.ID]
+		if !ok {
+			t.Fatalf("missing relationship id %s in response", r.ID)
+		}
+		if got.End1ID != r.End1ID || got.End2ID != r.End2ID {
+			t.Fatalf("endpoint mismatch for %s: got %+v want End1=%q End2=%q", r.ID, got, r.End1ID, r.End2ID)
+		}
+	}
+}
+
+func TestGetTopicPropertiesKitchenSinkBoundarySummaryPosition(t *testing.T) {
+	path := kitchenSinkPath(t)
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatalf("ReadMap: %v", err)
+	}
+	var boundarySheetID, boundaryTopicID string
+	var summarySheetID, summaryTopicID string
+	var posSheetID, posTopicID string
+	for si := range sheets {
+		sh := &sheets[si]
+		walkTopics(&sh.RootTopic, 0, nil, func(topic *xmind.Topic, _ int, _ *xmind.Topic) bool {
+			if boundarySheetID == "" && len(topic.Boundaries) > 0 {
+				boundarySheetID = sh.ID
+				boundaryTopicID = topic.ID
+			}
+			if summarySheetID == "" && len(topic.Summaries) > 0 {
+				summarySheetID = sh.ID
+				summaryTopicID = topic.ID
+			}
+			if posSheetID == "" && topic.Position != nil {
+				posSheetID = sh.ID
+				posTopicID = topic.ID
+			}
+			return true
+		})
+	}
+	if boundarySheetID == "" || boundaryTopicID == "" {
+		t.Fatal("kitchen-sink fixture must include a topic with boundaries (see AGENTS.md test fixture)")
+	}
+	if summarySheetID == "" || summaryTopicID == "" {
+		t.Fatal("kitchen-sink fixture must include a topic with summaries (see AGENTS.md test fixture)")
+	}
+	if posSheetID == "" || posTopicID == "" {
+		t.Fatal("kitchen-sink fixture must include a topic with position (floating topic; see AGENTS.md test fixture)")
+	}
+
+	h := NewXMindHandler()
+
+	resB := callTool(t, h.GetTopicProperties, map[string]any{
+		"path":     path,
+		"sheet_id": boundarySheetID,
+		"topic_id": boundaryTopicID,
+	})
+	if resB.IsError {
+		t.Fatalf("GetTopicProperties (boundary): %s", textContent(t, resB))
+	}
+	var bOut topicPropertiesResponse
+	if err := json.Unmarshal([]byte(textContent(t, resB)), &bOut); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if bOut.BoundaryCount != len(bOut.Boundaries) || bOut.BoundaryCount < 1 {
+		t.Fatalf("boundaryCount/boundaries: %+v", bOut)
+	}
+
+	resS := callTool(t, h.GetTopicProperties, map[string]any{
+		"path":     path,
+		"sheet_id": summarySheetID,
+		"topic_id": summaryTopicID,
+	})
+	if resS.IsError {
+		t.Fatalf("GetTopicProperties (summary): %s", textContent(t, resS))
+	}
+	var sOut topicPropertiesResponse
+	if err := json.Unmarshal([]byte(textContent(t, resS)), &sOut); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if sOut.SummaryCount < 1 {
+		t.Fatalf("summaryCount: got %+v", sOut)
+	}
+
+	resP := callTool(t, h.GetTopicProperties, map[string]any{
+		"path":     path,
+		"sheet_id": posSheetID,
+		"topic_id": posTopicID,
+	})
+	if resP.IsError {
+		t.Fatalf("GetTopicProperties (position): %s", textContent(t, resP))
+	}
+	var pOut topicPropertiesResponse
+	if err := json.Unmarshal([]byte(textContent(t, resP)), &pOut); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if pOut.Position == nil {
+		t.Fatal("expected position on floating topic")
+	}
+}
+
+func TestGetTopicPropertiesUnknownTopic(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.GetTopicProperties, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": sheetID,
+		"topic_id": "00000000-0000-0000-0000-000000000000",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for unknown topic_id")
+	}
+}
+
+func TestGetTopicPropertiesMissingTopicID(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.GetTopicProperties, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": sheetID,
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for missing topic_id")
+	}
+}

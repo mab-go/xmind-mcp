@@ -55,6 +55,20 @@ var toolGetSubtree = mcp.NewTool(
 	mcp.WithBoolean("include_links", mcp.Description("If true, include hyperlink href on nodes that have a link; omitted when empty")),
 )
 
+var toolGetTopicProperties = mcp.NewTool(
+	"xmind_get_topic_properties",
+	mcp.WithDescription(
+		"Return JSON for a single topic: id, title, structureClass, labels, markers, plain-text notes, hyperlink href, "+
+			"image source, position (floating topics), boundaries (with range and title), summaryCount (range descriptors on this topic), "+
+			"relationships on the sheet that reference this topic (end1Id/end2Id; sheet-level storage), and childCounts as direct child counts "+
+			"by list (attached, detached, summary — not the same as summaryCount). Use xmind_get_subtree for the full hierarchy. "+
+			"Use after writes to verify what was stored.",
+	),
+	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
+	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet containing the topic")),
+	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to inspect")),
+)
+
 var toolSearchTopics = mcp.NewTool(
 	"xmind_search_topics",
 	mcp.WithDescription(
