@@ -45,6 +45,7 @@ func newXMindServer(ctx context.Context, h *handler.XMindHandler) *mcpserver.MCP
 	s.AddTool(toolMoveTopic, h.MoveTopic)
 	s.AddTool(toolReorderChildren, h.ReorderChildren)
 	s.AddTool(toolSetTopicProperties, h.SetTopicProperties)
+	s.AddTool(toolSetTopicPropertiesBulk, h.SetTopicPropertiesBulk)
 	s.AddTool(toolAddFloatingTopic, h.AddFloatingTopic)
 	s.AddTool(toolAddRelationship, h.AddRelationship)
 	s.AddTool(toolListRelationships, h.ListRelationships)
