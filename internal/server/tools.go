@@ -118,6 +118,19 @@ var toolAddTopicsBulk = mcp.NewTool(
 	mcp.WithArray("topics", mcp.Required(), mcp.Description(`Array of {title, children?} objects`)),
 )
 
+var toolDuplicateTopic = mcp.NewTool(
+	"xmind_duplicate_topic",
+	mcp.WithDescription(
+		"Deep-clone a topic and its subtree (same sheet only) and attach the copy as an attached child of target_parent_id. "+
+			"Sheet-level relationships are not copied. Hyperlinks or note text that reference other topic IDs by ID are not rewritten and may still point at the original topics.",
+	),
+	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
+	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet containing the source topic")),
+	mcp.WithString("topic_id", mcp.Required(), mcp.Description("Root topic of the subtree to duplicate")),
+	mcp.WithString("target_parent_id", mcp.Required(), mcp.Description("Parent topic to attach the copy under (attached children)")),
+	mcp.WithNumber("position", mcp.Description("Zero-based index among the parent's attached children; omit to append")),
+)
+
 var toolRenameTopic = mcp.NewTool(
 	"xmind_rename_topic",
 	mcp.WithDescription("Rename an existing topic."),

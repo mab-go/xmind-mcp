@@ -2,10 +2,12 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/google/uuid"
 	"github.com/mab-go/xmind-mcp/internal/xmind"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -44,6 +46,60 @@ func countTopics(t *xmind.Topic) int {
 		n += countTopics(&t.Children.Summary[i])
 	}
 	return n
+}
+
+// deepCloneTopic returns a deep copy of the topic subtree with JSON round-trip (preserves codec `extra`
+// data), then assigns fresh UUIDs to every topic and to summary/boundary descriptors within the clone.
+func deepCloneTopic(root *xmind.Topic) (xmind.Topic, error) {
+	if root == nil {
+		return xmind.Topic{}, fmt.Errorf("deepCloneTopic: nil root")
+	}
+	data, err := json.Marshal(root)
+	if err != nil {
+		return xmind.Topic{}, fmt.Errorf("marshal topic: %w", err)
+	}
+	var clone xmind.Topic
+	if err := json.Unmarshal(data, &clone); err != nil {
+		return xmind.Topic{}, fmt.Errorf("unmarshal topic: %w", err)
+	}
+	if err := remapClonedTopicIDs(&clone); err != nil {
+		return xmind.Topic{}, err
+	}
+	return clone, nil
+}
+
+// remapClonedTopicIDs reassigns topic IDs and summary/boundary IDs after a JSON clone. Pass 1 fills
+// idMap; pass 2 updates Summary and Boundary records that reference topic IDs or need unique IDs.
+func remapClonedTopicIDs(root *xmind.Topic) error {
+	idMap := make(map[string]string)
+	walkTopics(root, 0, nil, func(t *xmind.Topic, _ int, _ *xmind.Topic) bool {
+		oldID := t.ID
+		newID := uuid.New().String()
+		idMap[oldID] = newID
+		t.ID = newID
+		return true
+	})
+	var remapErr error
+	walkTopics(root, 0, nil, func(t *xmind.Topic, _ int, _ *xmind.Topic) bool {
+		for i := range t.Summaries {
+			s := &t.Summaries[i]
+			oldTopicRef := s.TopicID
+			s.ID = uuid.New().String()
+			if oldTopicRef != "" {
+				newRef, ok := idMap[oldTopicRef]
+				if !ok {
+					remapErr = fmt.Errorf("clone topic: summary topicId %q not found in cloned subtree", oldTopicRef)
+					return false
+				}
+				s.TopicID = newRef
+			}
+		}
+		for i := range t.Boundaries {
+			t.Boundaries[i].ID = uuid.New().String()
+		}
+		return true
+	})
+	return remapErr
 }
 
 // findSheetByID returns the sheet with the given id, or nil if not found.

@@ -1420,6 +1420,184 @@ func TestSetTopicPropertiesMultilineNoteHTML(t *testing.T) {
 	}
 }
 
+func TestDuplicateTopicHappyPath(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dup.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := sheets[0].ID
+	rid := sheets[0].RootTopic.ID
+	mid := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Mid",
+	})), "added topic id ")
+	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": mid, "title": "Leaf"})
+	res := callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": mid, "target_parent_id": rid,
+	})
+	if res.IsError {
+		t.Fatalf("DuplicateTopic: %s", textContent(t, res))
+	}
+	msg := textContent(t, res)
+	var oldID, newID, parentID string
+	var n int
+	_, scanErr := fmt.Sscanf(msg, "duplicated topic %s as %s under %s (%d topics copied)", &oldID, &newID, &parentID, &n)
+	if scanErr != nil || oldID != mid || parentID != rid || n != 2 {
+		t.Fatalf("unexpected message: %q (scanErr=%v)", msg, scanErr)
+	}
+	if newID == mid {
+		t.Fatalf("expected new root id to differ from source: %s", newID)
+	}
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := &sheets[0].RootTopic
+	if root.Children == nil || len(root.Children.Attached) != 2 {
+		t.Fatalf("want 2 attached children on root (original Mid + duplicate), got %+v", root.Children)
+	}
+	if root.Children.Attached[0].ID != mid {
+		t.Fatalf("first child should be original Mid %s", mid)
+	}
+	if root.Children.Attached[1].ID != newID {
+		t.Fatalf("second child should be duplicate root %s, got %s", newID, root.Children.Attached[1].ID)
+	}
+	if root.Children.Attached[1].Title != "Mid" {
+		t.Fatalf("duplicate title: %+v", root.Children.Attached[1])
+	}
+	if root.Children.Attached[1].Children == nil || len(root.Children.Attached[1].Children.Attached) != 1 ||
+		root.Children.Attached[1].Children.Attached[0].Title != "Leaf" {
+		t.Fatalf("duplicate should include Leaf: %+v", root.Children.Attached[1].Children)
+	}
+}
+
+func TestDuplicateTopicPositionInsertAtZeroAndAppend(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "duppos.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	rid := sheets[0].RootTopic.ID
+	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": "A"})
+	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": "B"})
+	src := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Src",
+	})), "added topic id ")
+	callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": src, "target_parent_id": rid, "position": float64(0),
+	})
+	sheets, _ = xmind.ReadMap(path)
+	ch := sheets[0].RootTopic.Children.Attached
+	if len(ch) != 4 || ch[0].Title != "Src" || ch[1].Title != "A" {
+		t.Fatalf("want Src first after insert at 0, got titles %v", topicTitles(ch))
+	}
+
+	// Append: omit position — duplicate should be last; duplicate root id must differ from original Src.
+	callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": src, "target_parent_id": rid,
+	})
+	sheets, _ = xmind.ReadMap(path)
+	ch = sheets[0].RootTopic.Children.Attached
+	if len(ch) != 5 || ch[4].Title != "Src" || ch[4].ID == src || ch[3].ID != src {
+		t.Fatalf("want original Src at index 3 and appended duplicate at index 4, got titles %v ids last=%s src=%s",
+			topicTitles(ch), ch[4].ID, src)
+	}
+}
+
+func topicTitles(topics []xmind.Topic) []string {
+	var s []string
+	for i := range topics {
+		s = append(s, topics[i].Title)
+	}
+	return s
+}
+
+func TestDuplicateTopicErrors(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "duperr.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	rid := sheets[0].RootTopic.ID
+	child := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "C",
+	})), "added topic id ")
+
+	res := callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": "00000000-0000-0000-0000-000000000099", "topic_id": child, "target_parent_id": rid,
+	})
+	if !res.IsError || !strings.Contains(textContent(t, res), "sheet not found") {
+		t.Fatalf("expected sheet not found, got %v %q", res.IsError, textContent(t, res))
+	}
+	res = callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": "00000000-0000-0000-0000-000000000099", "target_parent_id": rid,
+	})
+	if !res.IsError || !strings.Contains(textContent(t, res), "source topic not found") {
+		t.Fatalf("expected source topic not found, got %q", textContent(t, res))
+	}
+	res = callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": child, "target_parent_id": "00000000-0000-0000-0000-000000000099",
+	})
+	if !res.IsError || !strings.Contains(textContent(t, res), "target parent not found") {
+		t.Fatalf("expected target parent not found, got %q", textContent(t, res))
+	}
+	res = callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": child, "target_parent_id": rid, "position": float64(99),
+	})
+	if !res.IsError || !strings.Contains(textContent(t, res), "out of range") {
+		t.Fatalf("expected position out of range, got %q", textContent(t, res))
+	}
+}
+
+func TestDuplicateTopicKitchenSinkSummariesSmoke(t *testing.T) {
+	h := NewXMindHandler()
+	path := copyFixture(t, kitchenSinkPath(t))
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summarySheetID, summaryTopicID string
+outer:
+	for si := range sheets {
+		sh := &sheets[si]
+		walkTopics(&sh.RootTopic, 0, nil, func(topic *xmind.Topic, _ int, _ *xmind.Topic) bool {
+			if len(topic.Summaries) > 0 {
+				summarySheetID = sh.ID
+				summaryTopicID = topic.ID
+				return false
+			}
+			return true
+		})
+		if summarySheetID != "" {
+			break outer
+		}
+	}
+	if summarySheetID == "" || summaryTopicID == "" {
+		t.Fatal("fixture must include a topic with summaries")
+	}
+	sh := findSheetByID(sheets, summarySheetID)
+	if sh == nil {
+		t.Fatal("sheet not found")
+	}
+	rootID := sh.RootTopic.ID
+	res := callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": summarySheetID, "topic_id": summaryTopicID, "target_parent_id": rootID,
+	})
+	if res.IsError {
+		t.Fatalf("DuplicateTopic: %s", textContent(t, res))
+	}
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = sheets // round-trip succeeded
+}
+
 func TestWalkTopicsStopsOnSiblings(t *testing.T) {
 	// Regression: early stop must not continue into later sibling subtrees.
 	root := &xmind.Topic{
