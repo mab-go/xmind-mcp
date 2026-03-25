@@ -9,7 +9,7 @@
 
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for
 reading and writing local [XMind](https://xmind.com) mind map files. XMind MCP
-exposes 26 tools that let any MCP-compatible AI client create, navigate, and
+exposes 27 tools that let any MCP-compatible AI client create, navigate, and
 edit `.xmind` files directly on disk.
 
 <p align="center">
@@ -123,21 +123,22 @@ Most tools here target a topic and take a `topic_id` from Tier 2 (or from
 prior results). A few use other ids (`from_id`/`to_id`, `relationship_id`,
 etc.)—see each row.
 
-| Tool                         | Description                                                                                                  |
-|------------------------------|--------------------------------------------------------------------------------------------------------------|
-| `xmind_add_topic`            | Add a new child topic under a specified parent.                                                              |
-| `xmind_add_topics_bulk`      | Add multiple topics (flat list or nested subtree) under a parent in one call.                                |
-| `xmind_duplicate_topic`      | Deep-clone a topic subtree under another parent (same sheet); sheet relationships are not copied.            |
-| `xmind_rename_topic`         | Change the title of an existing topic.                                                                       |
-| `xmind_delete_topic`         | Remove a topic and all its descendants.                                                                      |
-| `xmind_move_topic`           | Move a topic (and subtree) to a new parent; optional `position` sets insertion order (omit to append).       |
-| `xmind_reorder_children`     | Change the order of a topic's children without reparenting.                                                  |
-| `xmind_set_topic_properties` | Set or update topic metadata (notes, labels, markers, link, remove_markers); clearing rules are on the tool. |
-| `xmind_add_floating_topic`   | Add a detached floating topic not connected to the main hierarchy.                                           |
-| `xmind_add_relationship`     | Draw a labeled connector between any two topics.                                                             |
-| `xmind_delete_relationship`  | Remove a relationship by id (from `xmind_list_relationships`).                                               |
-| `xmind_add_summary`          | Add a summary callout bracketing a range of sibling topics.                                                  |
-| `xmind_add_boundary`         | Add a visual boundary enclosure around all children of a topic.                                              |
+| Tool                              | Description                                                                                                  |
+|-----------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `xmind_add_topic`                 | Add a new child topic under a specified parent.                                                              |
+| `xmind_add_topics_bulk`           | Add multiple topics (flat list or nested subtree) under a parent in one call.                                |
+| `xmind_duplicate_topic`           | Deep-clone a topic subtree under another parent (same sheet); sheet relationships are not copied.            |
+| `xmind_rename_topic`              | Change the title of an existing topic.                                                                       |
+| `xmind_delete_topic`              | Remove a topic and all its descendants.                                                                      |
+| `xmind_move_topic`                | Move a topic (and subtree) to a new parent; optional `position` sets insertion order (omit to append).       |
+| `xmind_reorder_children`          | Change the order of a topic's children without reparenting.                                                  |
+| `xmind_set_topic_properties`      | Set or update topic metadata (notes, labels, markers, link, remove_markers); clearing rules are on the tool. |
+| `xmind_set_topic_properties_bulk` | Apply the same metadata updates as `xmind_set_topic_properties` to many topic IDs in one read/write.         |
+| `xmind_add_floating_topic`        | Add a detached floating topic not connected to the main hierarchy.                                           |
+| `xmind_add_relationship`          | Draw a labeled connector between any two topics.                                                             |
+| `xmind_delete_relationship`       | Remove a relationship by id (from `xmind_list_relationships`).                                               |
+| `xmind_add_summary`               | Add a summary callout bracketing a range of sibling topics.                                                  |
+| `xmind_add_boundary`              | Add a visual boundary enclosure around all children of a topic.                                              |
 
 ### Tier 4: Utilities
 

@@ -1420,6 +1420,310 @@ func TestSetTopicPropertiesMultilineNoteHTML(t *testing.T) {
 	}
 }
 
+func TestSetTopicPropertiesBulkHappyPath(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulkhp.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	rid := sheets[0].RootTopic.ID
+	id1 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "One",
+	})), "added topic id ")
+	id2 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Two",
+	})), "added topic id ")
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path":      path,
+		"sheet_id":  sid,
+		"topic_ids": []any{id1, id2},
+		"labels":    []any{"bulk-a", "bulk-b"},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	if got := textContent(t, res); got != "updated 2 topics" {
+		t.Fatalf("message: got %q want %q", got, "updated 2 topics")
+	}
+	sheets, _ = xmind.ReadMap(path)
+	root := &sheets[0].RootTopic
+	for _, id := range []string{id1, id2} {
+		topic := findTopicByID(root, id)
+		if topic == nil {
+			t.Fatalf("topic %s not found", id)
+		}
+		if len(topic.Labels) != 2 || topic.Labels[0] != "bulk-a" || topic.Labels[1] != "bulk-b" {
+			t.Fatalf("topic %s labels: %v", id, topic.Labels)
+		}
+	}
+}
+
+func TestSetTopicPropertiesBulkMarkersAndRemoveMarkers(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulkmm.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	rid := sheets[0].RootTopic.ID
+	id1 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "One",
+	})), "added topic id ")
+	id2 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Two",
+	})), "added topic id ")
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path":      path,
+		"sheet_id":  sid,
+		"topic_ids": []any{id1, id2},
+		"markers":   []any{"priority-1", "task-done"},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	res = callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path":           path,
+		"sheet_id":       sid,
+		"topic_ids":      []any{id1, id2},
+		"remove_markers": []any{"priority-1"},
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	root := &sheets[0].RootTopic
+	for _, id := range []string{id1, id2} {
+		topic := findTopicByID(root, id)
+		if topic == nil {
+			t.Fatalf("topic %s not found", id)
+		}
+		if len(topic.Markers) != 1 || topic.Markers[0].MarkerID != "task-done" {
+			t.Fatalf("topic %s markers: %+v", id, topic.Markers)
+		}
+	}
+}
+
+func TestSetTopicPropertiesBulkEmptyTopicIDs(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulkempty.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path": path, "sheet_id": sid, "topic_ids": []any{},
+		"notes": "x",
+	})
+	if !res.IsError {
+		t.Fatal("expected error for empty topic_ids")
+	}
+	if msg := textContent(t, res); !strings.Contains(msg, "topic_ids must be non-empty") {
+		t.Fatalf("empty topic_ids: got %q", msg)
+	}
+	res = callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path": path, "sheet_id": sid, "notes": "x",
+	})
+	if !res.IsError {
+		t.Fatal("expected error when topic_ids is missing")
+	}
+	if msg := textContent(t, res); !strings.Contains(msg, "missing required argument: topic_ids") {
+		t.Fatalf("missing topic_ids: got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesBulkTopicIDsWrongType(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulktype.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path": path, "sheet_id": sid, "topic_ids": float64(1), "labels": []any{"x"},
+	})
+	if !res.IsError {
+		t.Fatal("expected error when topic_ids is not an array")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "invalid argument topic_ids: expected an array") {
+		t.Fatalf("got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesBulkTopicIDEmptyString(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulkemptystr.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	tid := sheets[0].RootTopic.ID
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path": path, "sheet_id": sid, "topic_ids": []any{tid, ""}, "labels": []any{"x"},
+	})
+	if !res.IsError {
+		t.Fatal("expected error for empty string in topic_ids")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "topic_ids[1]: expected non-empty string") {
+		t.Fatalf("got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesBulkTopicIDNonString(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulknonstr.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	tid := sheets[0].RootTopic.ID
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path": path, "sheet_id": sid, "topic_ids": []any{tid, 42}, "labels": []any{"x"},
+	})
+	if !res.IsError {
+		t.Fatal("expected error for non-string topic_ids element")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "topic_ids[1]: expected non-empty string") {
+		t.Fatalf("got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesBulkSingleMissingID(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulkonemiss.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	miss := "00000000-0000-0000-0000-00000000dead"
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path": path, "sheet_id": sid, "topic_ids": []any{miss}, "labels": []any{"x"},
+	})
+	if !res.IsError {
+		t.Fatal("expected error for missing topic")
+	}
+	msg := textContent(t, res)
+	if !strings.HasPrefix(msg, "topic not found: ") || !strings.Contains(msg, miss) {
+		t.Fatalf("got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesBulkDuplicateTopicIDs(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulkdup.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	tid := sheets[0].RootTopic.ID
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path":      path,
+		"sheet_id":  sid,
+		"topic_ids": []any{tid, tid},
+		"labels":    []any{"x"},
+	})
+	if !res.IsError {
+		t.Fatal("expected error for duplicate topic_ids")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "duplicate id in topic_ids") {
+		t.Fatalf("expected duplicate error, got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesBulkMultipleMissingIDs(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulkmiss.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	m1 := "00000000-0000-0000-0000-000000000003"
+	m2 := "00000000-0000-0000-0000-000000000001"
+	m3 := "00000000-0000-0000-0000-000000000002"
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path":      path,
+		"sheet_id":  sid,
+		"topic_ids": []any{m1, m2, m3},
+		"labels":    []any{"x"},
+	})
+	if !res.IsError {
+		t.Fatal("expected error for missing topics")
+	}
+	msg := textContent(t, res)
+	if !strings.HasPrefix(msg, "topic not found: ") {
+		t.Fatalf("error message: got %q", msg)
+	}
+	for _, id := range []string{m1, m2, m3} {
+		if !strings.Contains(msg, id) {
+			t.Fatalf("error message missing %s: %q", id, msg)
+		}
+	}
+}
+
+func TestSetTopicPropertiesBulkSheetNotFound(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulksh.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	tid := sheets[0].RootTopic.ID
+	badSheet := "00000000-0000-0000-0000-00000000dead"
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path":      path,
+		"sheet_id":  badSheet,
+		"topic_ids": []any{tid},
+		"labels":    []any{"x"},
+	})
+	if !res.IsError {
+		t.Fatal("expected error for unknown sheet")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "sheet not found:") || !strings.Contains(msg, badSheet) {
+		t.Fatalf("error message: got %q", msg)
+	}
+}
+
+func TestSetTopicPropertiesBulkNoActionableProperty(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulknoact.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	tid := sheets[0].RootTopic.ID
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path": path, "sheet_id": sid, "topic_ids": []any{tid},
+	})
+	if !res.IsError {
+		t.Fatal("expected error when no property updates")
+	}
+	res = callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path": path, "sheet_id": sid, "topic_ids": []any{tid}, "labels": nil,
+	})
+	if !res.IsError {
+		t.Fatal("expected error when only labels:null")
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "missing property updates") {
+		t.Fatalf("expected missing property updates, got %q", msg)
+	}
+}
+
 func TestDuplicateTopicHappyPath(t *testing.T) {
 	h := NewXMindHandler()
 	dir := t.TempDir()
