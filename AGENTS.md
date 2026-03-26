@@ -13,6 +13,12 @@ This file is the authoritative briefing for any AI agent working on this project
 ## Project Structure
 
 ```
+Dockerfile                — multi-stage image (Alpine build, distroless runtime)
+.dockerignore             — Docker build context exclusions
+.github/
+  workflows/
+    ci.yml                — test and lint on push and PR
+    docker-publish.yml    — multi-platform image build and push to GHCR
 cmd/
   xmind-mcp/
     main.go               — cobra command; calls server.RunStdioServer()
