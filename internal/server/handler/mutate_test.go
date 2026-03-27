@@ -3,6 +3,7 @@ package handler
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -11,7 +12,45 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mab-go/xmind-mcp/internal/xmind"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
+
+func parseAddTopicResult(t *testing.T, res *mcp.CallToolResult) addTopicResponse {
+	t.Helper()
+	if res.IsError {
+		t.Fatalf("expected success, got tool error: %s", textContent(t, res))
+	}
+	var out addTopicResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("parse add topic JSON: %v", err)
+	}
+	return out
+}
+
+func parseAddTopicsBulkResult(t *testing.T, res *mcp.CallToolResult) addTopicsBulkResponse {
+	t.Helper()
+	if res.IsError {
+		t.Fatalf("expected success, got tool error: %s", textContent(t, res))
+	}
+	var out addTopicsBulkResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("parse add topics bulk JSON: %v", err)
+	}
+	return out
+}
+
+func parseMoveTopicResult(t *testing.T, res *mcp.CallToolResult) moveTopicResponse {
+	t.Helper()
+	if res.IsError {
+		t.Fatalf("expected success, got tool error: %s", textContent(t, res))
+	}
+	var out moveTopicResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("parse move topic JSON: %v", err)
+	}
+	return out
+}
 
 func TestAddTopicAndRevisionID(t *testing.T) {
 	h := NewXMindHandler()
@@ -37,14 +76,13 @@ func TestAddTopicAndRevisionID(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("AddTopic: %s", textContent(t, res))
 	}
-	msg := textContent(t, res)
-	const prefix = "added topic id "
-	if !strings.HasPrefix(msg, prefix) {
-		t.Fatalf("unexpected message: %q", msg)
-	}
-	newID := strings.TrimPrefix(msg, prefix)
+	added := parseAddTopicResult(t, res)
+	newID := added.ID
 	if _, err := uuid.Parse(newID); err != nil {
 		t.Fatalf("new topic id is not a valid UUID: %q", newID)
+	}
+	if added.Position != 0 || added.SiblingCount != 1 {
+		t.Fatalf("unexpected add topic response: %+v", added)
 	}
 
 	sheets, err = xmind.ReadMap(path)
@@ -159,8 +197,12 @@ func TestAddTopicsBulkNested(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("AddTopicsBulk: %s", textContent(t, res))
 	}
-	if !strings.Contains(textContent(t, res), "added 3 topics") {
-		t.Fatalf("unexpected message: %s", textContent(t, res))
+	bulk := parseAddTopicsBulkResult(t, res)
+	if bulk.AddedCount != 3 || len(bulk.RootTopicIDs) != 1 || bulk.FirstPosition != 0 || bulk.SiblingCount != 1 {
+		t.Fatalf("unexpected bulk response: %+v", bulk)
+	}
+	if bulk.ParentID != rootID {
+		t.Fatalf("unexpected parentId: got %q want %q", bulk.ParentID, rootID)
 	}
 
 	sheets, err = xmind.ReadMap(path)
@@ -172,6 +214,9 @@ func TestAddTopicsBulkNested(t *testing.T) {
 		t.Fatal("expected one top-level branch")
 	}
 	l1 := &rt.Children.Attached[0]
+	if bulk.RootTopicIDs[0] != l1.ID {
+		t.Fatalf("rootTopicIds[0] %q != L1 id %q", bulk.RootTopicIDs[0], l1.ID)
+	}
 	if l1.Title != "L1" || l1.Children == nil || len(l1.Children.Attached) != 1 {
 		t.Fatalf("L1: %+v", l1)
 	}
@@ -195,7 +240,7 @@ func TestRenameTopic(t *testing.T) {
 	addRes := callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sheets[0].ID, "parent_id": rootID, "title": "Old",
 	})
-	tid := strings.TrimPrefix(textContent(t, addRes), "added topic id ")
+	tid := parseAddTopicResult(t, addRes).ID
 
 	res := callTool(t, h.RenameTopic, map[string]any{
 		"path": path, "sheet_id": sheets[0].ID, "topic_id": tid, "title": "New",
@@ -234,7 +279,7 @@ func TestDeleteTopic(t *testing.T) {
 	addRes := callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sheets[0].ID, "parent_id": rootID, "title": "X",
 	})
-	tid := strings.TrimPrefix(textContent(t, addRes), "added topic id ")
+	tid := parseAddTopicResult(t, addRes).ID
 
 	res := callTool(t, h.DeleteTopic, map[string]any{
 		"path": path, "sheet_id": sheets[0].ID, "topic_id": tid,
@@ -259,12 +304,12 @@ func TestMoveTopicCycleError(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rootID := sheets[0].RootTopic.ID
-	aID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	aID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rootID, "title": "A",
-	})), "added topic id ")
-	bID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	bID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": aID, "title": "B",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.MoveTopic, map[string]any{
 		"path":          path,
@@ -285,12 +330,12 @@ func TestMoveTopic(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rootID := sheets[0].RootTopic.ID
-	aID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	aID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rootID, "title": "A",
-	})), "added topic id ")
-	bID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	bID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rootID, "title": "B",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.MoveTopic, map[string]any{
 		"path":          path,
@@ -300,6 +345,10 @@ func TestMoveTopic(t *testing.T) {
 	})
 	if res.IsError {
 		t.Fatal(textContent(t, res))
+	}
+	mv := parseMoveTopicResult(t, res)
+	if mv.TopicID != bID || mv.ParentID != aID || mv.Position != 0 || mv.SiblingCount != 1 {
+		t.Fatalf("unexpected move response: %+v", mv)
 	}
 	sheets, _ = xmind.ReadMap(path)
 	root := &sheets[0].RootTopic
@@ -329,12 +378,12 @@ func TestMoveTopicSiblingForward(t *testing.T) {
 	rid := sheets[0].RootTopic.ID
 
 	// Add Alpha then Gamma so Alpha is at index 0, Gamma at index 1.
-	alphaID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	alphaID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Alpha",
-	})), "added topic id ")
-	gammaID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	gammaID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Gamma",
-	})), "added topic id ")
+	})).ID
 
 	// Move Alpha (index 0) under Gamma (index 1) — destination is AFTER source.
 	res := callTool(t, h.MoveTopic, map[string]any{
@@ -345,6 +394,10 @@ func TestMoveTopicSiblingForward(t *testing.T) {
 	})
 	if res.IsError {
 		t.Fatalf("MoveTopic: %s", textContent(t, res))
+	}
+	mv := parseMoveTopicResult(t, res)
+	if mv.TopicID != alphaID || mv.ParentID != gammaID || mv.Position != 0 || mv.SiblingCount != 1 {
+		t.Fatalf("unexpected move response: %+v", mv)
 	}
 
 	sheets, _ = xmind.ReadMap(path)
@@ -389,12 +442,12 @@ func TestMoveTopicSiblingBackward(t *testing.T) {
 	rid := sheets[0].RootTopic.ID
 
 	// Add Gamma then Alpha so Gamma is at index 0, Alpha at index 1.
-	gammaID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	gammaID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Gamma",
-	})), "added topic id ")
-	alphaID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	alphaID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Alpha",
-	})), "added topic id ")
+	})).ID
 
 	// Move Alpha (index 1) under Gamma (index 0) — destination is BEFORE source.
 	res := callTool(t, h.MoveTopic, map[string]any{
@@ -405,6 +458,10 @@ func TestMoveTopicSiblingBackward(t *testing.T) {
 	})
 	if res.IsError {
 		t.Fatalf("MoveTopic: %s", textContent(t, res))
+	}
+	mv := parseMoveTopicResult(t, res)
+	if mv.TopicID != alphaID || mv.ParentID != gammaID || mv.Position != 0 || mv.SiblingCount != 1 {
+		t.Fatalf("unexpected move response: %+v", mv)
 	}
 
 	sheets, _ = xmind.ReadMap(path)
@@ -462,12 +519,12 @@ func TestReorderChildren(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rootID := sheets[0].RootTopic.ID
-	idA := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	idA := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rootID, "title": "A",
-	})), "added topic id ")
-	idB := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	idB := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rootID, "title": "B",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.ReorderChildren, map[string]any{
 		"path":        path,
@@ -576,7 +633,7 @@ func TestDeleteTopicBumpsRevisionID(t *testing.T) {
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
 	addRes := callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": "X"})
-	tid := strings.TrimPrefix(textContent(t, addRes), "added topic id ")
+	tid := parseAddTopicResult(t, addRes).ID
 	res := callTool(t, h.DeleteTopic, map[string]any{"path": path, "sheet_id": sid, "topic_id": tid})
 	if res.IsError {
 		t.Fatal(textContent(t, res))
@@ -930,12 +987,12 @@ func TestAddRelationship(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	aID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	aID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "A",
-	})), "added topic id ")
-	bID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	bID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "B",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.AddRelationship, map[string]any{
 		"path": path, "sheet_id": sid, "from_id": aID, "to_id": bID, "label": "relates",
@@ -962,12 +1019,12 @@ func TestDeleteRelationship(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	aID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	aID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "A",
-	})), "added topic id ")
-	bID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	bID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "B",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.AddRelationship, map[string]any{
 		"path": path, "sheet_id": sid, "from_id": aID, "to_id": bID,
@@ -1037,9 +1094,9 @@ func TestAddRelationshipInvalidTopic(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	aID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	aID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "A",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.AddRelationship, map[string]any{
 		"path": path, "sheet_id": sid, "from_id": aID, "to_id": "00000000-0000-0000-0000-000000000000",
@@ -1064,12 +1121,12 @@ func TestAddRelationshipLabelWrongType(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	aID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	aID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "A",
-	})), "added topic id ")
-	bID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	bID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "B",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.AddRelationship, map[string]any{
 		"path": path, "sheet_id": sid, "from_id": aID, "to_id": bID, "label": float64(42),
@@ -1256,7 +1313,7 @@ func TestRenameTopicClearsTitleUnedited(t *testing.T) {
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
 	addRes := callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": "Child"})
-	tid := strings.TrimPrefix(textContent(t, addRes), "added topic id ")
+	tid := parseAddTopicResult(t, addRes).ID
 	sheets, err = xmind.ReadMap(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1291,17 +1348,21 @@ func TestMoveTopicToPosition(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	_ = strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	_ = parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "A",
-	})), "added topic id ")
-	idB := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	idB := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "B",
-	})), "added topic id ")
+	})).ID
 	res := callTool(t, h.MoveTopic, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": idB, "new_parent_id": rid, "position": float64(0),
 	})
 	if res.IsError {
 		t.Fatal(textContent(t, res))
+	}
+	mv := parseMoveTopicResult(t, res)
+	if mv.TopicID != idB || mv.ParentID != rid || mv.Position != 0 || mv.SiblingCount != 2 {
+		t.Fatalf("unexpected move response: %+v", mv)
 	}
 	sheets, _ = xmind.ReadMap(path)
 	ch := sheets[0].RootTopic.Children.Attached
@@ -1318,15 +1379,15 @@ func TestDeleteTopicAlsoRemovesDescendants(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	l1 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	l1 := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "L1",
-	})), "added topic id ")
-	l2 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	l2 := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": l1, "title": "L2",
-	})), "added topic id ")
-	l3 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	l3 := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": l2, "title": "L3",
-	})), "added topic id ")
+	})).ID
 	res := callTool(t, h.DeleteTopic, map[string]any{"path": path, "sheet_id": sid, "topic_id": l1})
 	if res.IsError {
 		t.Fatal(textContent(t, res))
@@ -1428,12 +1489,12 @@ func TestSetTopicPropertiesBulkHappyPath(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	id1 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	id1 := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "One",
-	})), "added topic id ")
-	id2 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	id2 := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Two",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
 		"path":      path,
@@ -1468,12 +1529,12 @@ func TestSetTopicPropertiesBulkMarkersAndRemoveMarkers(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	id1 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	id1 := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "One",
-	})), "added topic id ")
-	id2 := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	})).ID
+	id2 := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Two",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
 		"path":      path,
@@ -1735,9 +1796,9 @@ func TestDuplicateTopicHappyPath(t *testing.T) {
 	}
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	mid := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	mid := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Mid",
-	})), "added topic id ")
+	})).ID
 	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": mid, "title": "Leaf"})
 	res := callTool(t, h.DuplicateTopic, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": mid, "target_parent_id": rid,
@@ -1745,13 +1806,17 @@ func TestDuplicateTopicHappyPath(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("DuplicateTopic: %s", textContent(t, res))
 	}
-	msg := textContent(t, res)
-	var oldID, newID, parentID string
-	var n int
-	_, scanErr := fmt.Sscanf(msg, "duplicated topic %s as %s under %s (%d topics copied)", &oldID, &newID, &parentID, &n)
-	if scanErr != nil || oldID != mid || parentID != rid || n != 2 {
-		t.Fatalf("unexpected message: %q (scanErr=%v)", msg, scanErr)
+	var dup duplicateTopicResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &dup); err != nil {
+		t.Fatalf("parse duplicate topic JSON: %v", err)
 	}
+	if dup.SourceID != mid || dup.ParentID != rid || dup.CopiedCount != 2 {
+		t.Fatalf("unexpected duplicate response: %+v", dup)
+	}
+	if dup.Position != 1 || dup.SiblingCount != 2 {
+		t.Fatalf("unexpected duplicate response position/siblingCount: %+v", dup)
+	}
+	newID := dup.NewRootID
 	if newID == mid {
 		t.Fatalf("expected new root id to differ from source: %s", newID)
 	}
@@ -1788,9 +1853,9 @@ func TestDuplicateTopicPositionInsertAtZeroAndAppend(t *testing.T) {
 	rid := sheets[0].RootTopic.ID
 	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": "A"})
 	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": "B"})
-	src := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	src := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Src",
-	})), "added topic id ")
+	})).ID
 	callTool(t, h.DuplicateTopic, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": src, "target_parent_id": rid, "position": float64(0),
 	})
@@ -1828,9 +1893,9 @@ func TestDuplicateTopicErrors(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	child := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	child := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "C",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.DuplicateTopic, map[string]any{
 		"path": path, "sheet_id": "00000000-0000-0000-0000-000000000099", "topic_id": child, "target_parent_id": rid,

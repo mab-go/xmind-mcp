@@ -65,9 +65,9 @@ func TestFlattenToOutlineSubtree(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	aID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	aID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "A",
-	})), "added topic id ")
+	})).ID
 	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": aID, "title": "Leaf"})
 
 	res := callTool(t, h.FlattenToOutline, map[string]any{
@@ -330,9 +330,9 @@ func TestFlattenImportRoundTripMarkdownUnderParent(t *testing.T) {
 	sheets, _ := xmind.ReadMap(path)
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	hubID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	hubID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path, "sheet_id": sid, "parent_id": rid, "title": "Hub",
-	})), "added topic id ")
+	})).ID
 	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": hubID, "title": "Branch A"})
 	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": hubID, "title": "Branch B"})
 
@@ -345,9 +345,9 @@ func TestFlattenImportRoundTripMarkdownUnderParent(t *testing.T) {
 	sheets2, _ := xmind.ReadMap(path2)
 	sid2 := sheets2[0].ID
 	rid2 := sheets2[0].RootTopic.ID
-	hub2ID := strings.TrimPrefix(textContent(t, callTool(t, h.AddTopic, map[string]any{
+	hub2ID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
 		"path": path2, "sheet_id": sid2, "parent_id": rid2, "title": "Hub2",
-	})), "added topic id ")
+	})).ID
 
 	res := callTool(t, h.ImportFromOutline, map[string]any{
 		"path": path2, "sheet_id": sid2, "parent_id": hub2ID, "outline": flat1,

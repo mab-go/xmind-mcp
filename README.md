@@ -91,8 +91,8 @@ Multi-platform build (no `--load`; suitable for CI or registry push):
 docker buildx build --platform linux/amd64,linux/arm64 .
 ```
 
-**Linux (amd64 host):** Building the `linux/arm64` variant runs `RUN` steps inside
-an ARM image. Without [QEMU user emulation](https://docs.docker.com/build/building/multi-platform/#qemu),
+**Linux (amd64 host):** Building the `linux/arm64` variant runs `RUN` steps
+inside an ARM image. Without [QEMU user emulation](https://docs.docker.com/build/building/multi-platform/#qemu),
 those steps fail with `exec format error`. Install binfmt handlers once:
 
 ```bash
@@ -199,22 +199,29 @@ Most tools here target a topic and take a `topic_id` from Tier 2 (or from
 prior results). A few use other ids (`from_id`/`to_id`, `relationship_id`,
 etc.)—see each row.
 
-| Tool                              | Description                                                                                                  |
-|-----------------------------------|--------------------------------------------------------------------------------------------------------------|
-| `xmind_add_topic`                 | Add a new child topic under a specified parent.                                                              |
-| `xmind_add_topics_bulk`           | Add multiple topics (flat list or nested subtree) under a parent in one call.                                |
-| `xmind_duplicate_topic`           | Deep-clone a topic subtree under another parent (same sheet); sheet relationships are not copied.            |
-| `xmind_rename_topic`              | Change the title of an existing topic.                                                                       |
-| `xmind_delete_topic`              | Remove a topic and all its descendants.                                                                      |
-| `xmind_move_topic`                | Move a topic (and subtree) to a new parent; optional `position` sets insertion order (omit to append).       |
-| `xmind_reorder_children`          | Change the order of a topic's children without reparenting.                                                  |
-| `xmind_set_topic_properties`      | Set or update topic metadata (notes, labels, markers, link, remove_markers); clearing rules are on the tool. |
-| `xmind_set_topic_properties_bulk` | Apply the same metadata updates as `xmind_set_topic_properties` to many topic IDs in one read/write.         |
-| `xmind_add_floating_topic`        | Add a detached floating topic not connected to the main hierarchy.                                           |
-| `xmind_add_relationship`          | Draw a labeled connector between any two topics.                                                             |
-| `xmind_delete_relationship`       | Remove a relationship by id (from `xmind_list_relationships`).                                               |
-| `xmind_add_summary`               | Add a summary callout bracketing a range of sibling topics.                                                  |
-| `xmind_add_boundary`              | Add a visual boundary enclosure around all children of a topic.                                              |
+On success, **`xmind_add_topic`**, **`xmind_add_topics_bulk`**,
+**`xmind_duplicate_topic`**, and **`xmind_move_topic`** return **JSON** (topic
+ids, insertion indices, sibling counts, and related fields). Exact keys match
+each tool's description from the running MCP server. Other mutation tools in
+this tier return plain-text success messages unless their descriptions say
+otherwise.
+
+| Tool                              | Description                                                                                                                  |
+|-----------------------------------|------------------------------------------------------------------------------------------------------------------------------|
+| `xmind_add_topic`                 | Add a new child topic under a specified parent; success body is JSON.                                                        |
+| `xmind_add_topics_bulk`           | Add multiple topics (flat list or nested subtree) under a parent in one call; success body is JSON.                          |
+| `xmind_duplicate_topic`           | Deep-clone a topic subtree under another parent (same sheet); sheet relationships are not copied; success body is JSON.      |
+| `xmind_rename_topic`              | Change the title of an existing topic.                                                                                       |
+| `xmind_delete_topic`              | Remove a topic and all its descendants.                                                                                      |
+| `xmind_move_topic`                | Move a topic (and subtree) to a new parent; optional `position` sets insertion order (omit to append); success body is JSON. |
+| `xmind_reorder_children`          | Change the order of a topic's children without reparenting.                                                                  |
+| `xmind_set_topic_properties`      | Set or update topic metadata (notes, labels, markers, link, remove_markers); clearing rules are on the tool.                 |
+| `xmind_set_topic_properties_bulk` | Apply the same metadata updates as `xmind_set_topic_properties` to many topic IDs in one read/write.                         |
+| `xmind_add_floating_topic`        | Add a detached floating topic not connected to the main hierarchy.                                                           |
+| `xmind_add_relationship`          | Draw a labeled connector between any two topics.                                                                             |
+| `xmind_delete_relationship`       | Remove a relationship by id (from `xmind_list_relationships`).                                                               |
+| `xmind_add_summary`               | Add a summary callout bracketing a range of sibling topics.                                                                  |
+| `xmind_add_boundary`              | Add a visual boundary enclosure around all children of a topic.                                                              |
 
 ### Tier 4: Utilities
 
