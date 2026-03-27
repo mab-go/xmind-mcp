@@ -72,14 +72,6 @@ func withLink(t xmind.Topic, url string) xmind.Topic {
 	return t
 }
 
-func withTaskStatus(t xmind.Topic) xmind.Topic {
-	t.Extensions = append(t.Extensions, xmind.Extension{
-		Provider: "org.xmind.ui.task",
-		Content:  map[string]any{"status": "done"},
-	})
-	return t
-}
-
 // ── map construction ─────────────────────────────────────────────────────────
 
 func buildSheet() xmind.Sheet {
@@ -87,20 +79,23 @@ func buildSheet() xmind.Sheet {
 	// ═══════════════════════════════════════════════════════════════════════
 	// Branch 1: Tools
 	//
-	// Each tier gets a handful of representative tool names as leaves,
-	// with the full list in the note. Enough to look populated without
-	// listing all 22 individually.
+	// All 27 tools, organized into four tiers with priority markers.
+	// Every tool name is visible — this is the product.
 	// ═══════════════════════════════════════════════════════════════════════
 
 	tier1 := topic("Tier 1 — File & Sheet Mgmt",
 		withMarkers(leaf("open_map"), "priority-1"),
 		withMarkers(leaf("create_map"), "priority-1"),
+		withMarkers(leaf("list_sheets"), "priority-1"),
 		withMarkers(leaf("add_sheet"), "priority-1"),
+		withMarkers(leaf("delete_sheet"), "priority-1"),
+		withMarkers(leaf("list_relationships"), "priority-1"),
 	)
-	tier1 = withNote(tier1, "5 tools. Also: list_sheets, delete_sheet. Workbook-level operations — typically the first calls in any agentic workflow.")
+	tier1 = withNote(tier1, "6 tools. Workbook-level operations — typically the first calls in any agentic workflow.")
 
 	tier2 := topic("Tier 2 — Finding Topics",
 		withMarkers(leaf("get_subtree"), "priority-2"),
+		withMarkers(leaf("get_topic_properties"), "priority-2"),
 		withMarkers(leaf("search_topics"), "priority-2"),
 		withMarkers(leaf("find_topic"), "priority-2"),
 	)
@@ -108,15 +103,21 @@ func buildSheet() xmind.Sheet {
 
 	tier3 := topic("Tier 3 — Topic Mutations",
 		withMarkers(leaf("add_topic"), "priority-3"),
+		withMarkers(leaf("add_topics_bulk"), "priority-3"),
+		withMarkers(leaf("duplicate_topic"), "priority-3"),
 		withMarkers(leaf("rename_topic"), "priority-3"),
 		withMarkers(leaf("delete_topic"), "priority-3"),
 		withMarkers(leaf("move_topic"), "priority-3"),
+		withMarkers(leaf("reorder_children"), "priority-3"),
 		withMarkers(leaf("set_topic_properties"), "priority-3"),
+		withMarkers(leaf("set_topic_properties_bulk"), "priority-3"),
+		withMarkers(leaf("add_floating_topic"), "priority-3"),
 		withMarkers(leaf("add_relationship"), "priority-3"),
+		withMarkers(leaf("delete_relationship"), "priority-3"),
 		withMarkers(leaf("add_summary"), "priority-3"),
 		withMarkers(leaf("add_boundary"), "priority-3"),
 	)
-	tier3 = withNote(tier3, "11 tools total. Also: add_topics_bulk, reorder_children, add_floating_topic. All require a topic_id from a Tier 2 call.")
+	tier3 = withNote(tier3, "14 tools. All require an ID from a Tier 2 call.")
 
 	tier4 := topic("Tier 4 — Utilities",
 		withMarkers(leaf("flatten_to_outline"), "priority-4"),
@@ -125,12 +126,12 @@ func buildSheet() xmind.Sheet {
 	)
 	tier4 = withNote(tier4, "Export to text/markdown, import from outlines, bulk rename across a sheet.")
 
-	tools := topic("🛠️ 22 Tools", tier1, tier2, tier3, tier4)
+	tools := topic("🛠️ 27 Tools", tier1, tier2, tier3, tier4)
 	tools = withNote(tools, "All prefixed with xmind_ to avoid collisions in multi-server MCP environments.")
 
 	// Summary across all four tiers.
 	toolsSummaryID := id()
-	tools.Children.Summary = []xmind.Topic{{ID: toolsSummaryID, Title: "find first, then act"}}
+	tools.Children.Summary = []xmind.Topic{{ID: toolsSummaryID, Title: "Find → Then Act"}}
 	tools.Summaries = []xmind.Summary{{
 		ID:      id(),
 		Range:   "(0,3)",
@@ -138,100 +139,49 @@ func buildSheet() xmind.Sheet {
 	}}
 
 	// ═══════════════════════════════════════════════════════════════════════
-	// Branch 2: How It Works
+	// Branch 2: Design
 	//
-	// Architecture (conceptual data flow), the read/write lifecycle, and
-	// schema gotchas — one branch telling the whole design story.
+	// The engineering principles that make the project trustworthy.
+	// Tight — four leaves with a boundary. Short titles, details in notes.
 	// ═══════════════════════════════════════════════════════════════════════
 
-	// -- Architecture: the conceptual layers --
-
-	typesNode := withNote(
-		withLabels(leaf("content.json → Go structs"), "xmind/types.go"),
-		"Custom UnmarshalJSON/MarshalJSON on every type. Unknown JSON fields are captured into an 'extra' map and merged back on marshal — future XMind fields survive round-trips without data loss.",
+	stateless := withNote(
+		withMarkers(leaf("Stateless"), "star-blue"),
+		"No session state, no in-memory cache between calls. Every tool opens the file, applies changes, and writes it back.",
 	)
 
-	zipNode := withNote(
-		withLabels(leaf("ZIP read/write layer"), "xmind/reader.go, writer.go"),
-		"Reader opens .xmind zip, extracts content.json, unmarshals into []Sheet. Writer serializes sheets, writes to temp file, then atomic os.Rename swap. Non-content entries (images, XML stub) are copied byte-for-byte via OpenRaw/CreateRaw.",
+	atomicSwap := withNote(
+		withMarkers(leaf("Atomic File Swap"), "star-blue"),
+		"Writes to a temp file first, then os.Rename. If anything fails mid-write, the original .xmind is untouched.",
 	)
 
-	handlersNode := withNote(
-		withLabels(leaf("22 tool handlers"), "handler/*.go"),
-		"Each handler: parse args → open file → find sheet → find topic → apply change → write file → return result. Stateless — no session, no in-memory cache between calls.",
+	preserveUnknown := withNote(
+		withMarkers(leaf("Unknown-Field Preservation"), "star-blue"),
+		"Custom JSON codec captures unknown keys into an extra map and merges them back on marshal. Future XMind fields survive round-trips.",
 	)
 
-	mcpNode := withNote(
-		withLabels(leaf("MCP server + stdio transport"), "server/server.go"),
-		"Tool registration and stdio transport via mark3labs/mcp-go. Lifecycle hooks for logging. All tool names prefixed xmind_ for multi-server safety.",
+	roundTrip := withNote(
+		withMarkers(leaf("Round-Trip Fidelity"), "star-blue"),
+		"Themes, extensions, binary resources, and non-content ZIP entries are preserved byte-for-byte through read/write cycles.",
 	)
 
-	arch := topic("Architecture",
-		typesNode, zipNode, handlersNode, mcpNode,
-	)
-	arch = withMarkers(arch, "star-blue")
+	design := topic("⚙️ Design", stateless, atomicSwap, preserveUnknown, roundTrip)
 
-	// -- Mutation lifecycle --
-
-	step1 := withMarkers(withTaskStatus(leaf("Open .xmind zip")), "task-start")
-	step2 := withMarkers(withTaskStatus(leaf("Parse content.json")), "task-3oct")
-	step3 := withMarkers(withTaskStatus(leaf("Mutate in memory")), "task-half")
-	step4 := withMarkers(withTaskStatus(leaf("Write temp → atomic swap")), "task-7oct")
-	step5 := withMarkers(withTaskStatus(leaf("Return result")), "task-done")
-
-	lifecycle := topic("Mutation Lifecycle", step1, step2, step3, step4, step5)
-	lifecycle = withNote(lifecycle, "Every mutating tool call follows this exact cycle. No session state, no temp files left behind. If a write fails mid-way, the original file is untouched.")
-
-	// -- Gotchas --
-
-	summaryGotcha := withNote(
-		withMarkers(leaf("Summaries need a double-write"), "flag-red"),
-		"Must write to BOTH children.summary (the topic) AND parent.summaries (the range descriptor). Omitting either produces a broken map in XMind.",
-	)
-
-	relGotcha := withNote(
-		withMarkers(leaf("Relationships live on the sheet"), "flag-red"),
-		"Sheet.Relationships[], NOT on any topic. Writing to a topic appears to work but won't render.",
-	)
-
-	errorGotcha := withNote(
-		withMarkers(leaf("Tool errors ≠ protocol errors"), "flag-orange"),
-		"Expected failures (not found, bad args) → return (*CallToolResult, nil) with IsError. Unexpected failures (I/O, marshal) → return (nil, error). Conflating these makes failures look like crashes to the model.",
-	)
-
-	preserveGotcha := withNote(
-		withMarkers(leaf("Preserve unknown JSON fields"), "flag-yellow"),
-		"json_codec.go captures unknown keys into an 'extra' map and merges them back on marshal. Prevents silent data loss when XMind ships new features.",
-	)
-
-	gotchas := topic("Gotchas", summaryGotcha, relGotcha, errorGotcha, preserveGotcha)
-
-	// Boundary around the gotchas.
-	gotchas.Boundaries = []xmind.Boundary{{
+	// Boundary around all design principles.
+	design.Boundaries = []xmind.Boundary{{
 		ID:    id(),
 		Range: "master",
-		Title: "Here be dragons",
+		Title: "Zero Data Loss",
 	}}
 
-	design := topic("⚙️ How It Works", arch, lifecycle, gotchas)
-	design = withLink(design, "https://github.com/mab-go/xmind-mcp")
-
-	// Relationship: lifecycle's atomic swap ↔ error handling gotcha
-	rel := xmind.Relationship{
-		ID:     id(),
-		End1ID: step4.ID,
-		End2ID: errorGotcha.ID,
-		Title:  "both protect file integrity",
-	}
-
 	// ═══════════════════════════════════════════════════════════════════════
-	// Branch 3: What It Supports
+	// Branch 3: XMind Features
 	//
-	// The XMind features the server can read and write — this is what a
-	// user actually wants to know: "what can I do with this?"
+	// What the server can read and write. Each leaf is decorated with the
+	// XMind feature it describes — the screenshot IS the proof.
 	// ═══════════════════════════════════════════════════════════════════════
 
-	topicFeatures := topic("Topic Markup",
+	topicMarkup := topic("Topic Markup",
 		withMarkers(leaf("Notes (plain + HTML)"), "c_symbol_pen"),
 		withMarkers(leaf("Labels"), "tag-blue"),
 		withMarkers(leaf("Markers (7 categories)"), "star-yellow"),
@@ -239,32 +189,37 @@ func buildSheet() xmind.Sheet {
 		withMarkers(leaf("Task checkboxes"), "task-done"),
 	)
 
-	sheetFeatures := topic("Sheet Features",
+	sheetConstructs := topic("Sheet Constructs",
 		leaf("Relationships between any two topics"),
 		leaf("Summaries spanning sibling ranges"),
 		leaf("Boundaries grouping children"),
 		leaf("Floating topics (detached)"),
 	)
 
-	mapFeatures := topic("Map Features",
+	mapCapabilities := topic("Map Capabilities",
 		leaf("All 9 structure types"),
 		leaf("Multi-sheet workbooks"),
-		leaf("Outline import/export"),
-		withNote(leaf("Round-trip fidelity"), "Unknown fields, themes, extensions, and binary resources are preserved through read/write cycles."),
+		leaf("Outline import / export"),
 	)
 
-	supports := topic("📄 What It Supports", topicFeatures, sheetFeatures, mapFeatures)
-	supports = withNote(supports, "The server reads and writes .xmind files — ZIP archives containing content.json, metadata.json, a content.xml stub, and optional resources/ for images and attachments.")
+	features := topic("📄 XMind Features", topicMarkup, sheetConstructs, mapCapabilities)
+	features = withNote(features, "Reads and writes .xmind files — ZIP archives containing content.json and optional resources.")
 
 	// ═══════════════════════════════════════════════════════════════════════
-	// Branch 4: Project Info (lightweight)
+	// Branch 4: Project
+	//
+	// Lightweight metadata. Labels and links give visual variety.
+	// The relationship between the repo and mcp-go shows a dependency.
 	// ═══════════════════════════════════════════════════════════════════════
 
-	meta := topic("📋 Project",
-		withLink(withLabels(leaf("github.com/mab-go/xmind-mcp"), "source"), "https://github.com/mab-go/xmind-mcp"),
+	repoLeaf := withLink(withLabels(leaf("github.com/mab-go/xmind-mcp"), "source"), "https://github.com/mab-go/xmind-mcp")
+	mcpGoLeaf := withLink(withLabels(leaf("mark3labs/mcp-go"), "MCP protocol"), "https://github.com/mark3labs/mcp-go")
+
+	project := topic("📋 Project",
+		repoLeaf,
 		withLabels(leaf("MIT License"), "open source"),
 		withLabels(leaf("Go 1.26.1+"), "prerequisite"),
-		withLink(withLabels(leaf("mark3labs/mcp-go"), "MCP protocol"), "https://github.com/mark3labs/mcp-go"),
+		mcpGoLeaf,
 	)
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -277,10 +232,18 @@ func buildSheet() xmind.Sheet {
 		Title:          "xmind-mcp",
 		StructureClass: structureClass,
 		Children: &xmind.Children{
-			Attached: []xmind.Topic{tools, design, supports, meta},
+			Attached: []xmind.Topic{tools, design, features, project},
 		},
 	}
-	root = withNote(root, "An MCP server for reading and writing local XMind mind map files. 22 tools let any MCP-compatible AI client create, navigate, and edit .xmind files directly on disk.")
+	root = withNote(root, "An MCP server for reading and writing local XMind mind map files. 27 tools let any MCP-compatible AI client create, navigate, and edit .xmind files directly on disk.")
+
+	// ─── Relationship: repo depends on mcp-go ────────────────────────────
+	dependsOn := xmind.Relationship{
+		ID:     id(),
+		End1ID: repoLeaf.ID,
+		End2ID: mcpGoLeaf.ID,
+		Title:  "Depends On",
+	}
 
 	return xmind.Sheet{
 		ID:               id(),
@@ -289,7 +252,7 @@ func buildSheet() xmind.Sheet {
 		Title:            "xmind-mcp",
 		TopicOverlapping: "overlap",
 		RootTopic:        root,
-		Relationships:    []xmind.Relationship{rel},
+		Relationships:    []xmind.Relationship{dependsOn},
 		Theme:            xmind.DefaultTheme,
 		Extensions:       xmind.DefaultSheetExtensions(structureClass),
 	}
