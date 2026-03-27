@@ -101,7 +101,7 @@ var toolFindTopic = mcp.NewTool(
 
 var toolAddTopic = mcp.NewTool(
 	"xmind_add_topic",
-	mcp.WithDescription("Add a new attached child topic under a parent topic."),
+	mcp.WithDescription("Add a new attached child topic under a parent topic. Returns JSON: {\"id\":\"…\",\"position\":N,\"siblingCount\":N}."),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("ID of the parent topic")),
@@ -111,7 +111,7 @@ var toolAddTopic = mcp.NewTool(
 
 var toolAddTopicsBulk = mcp.NewTool(
 	"xmind_add_topics_bulk",
-	mcp.WithDescription("Add multiple topics under a parent in one call; each item may nest children."),
+	mcp.WithDescription("Add multiple topics under a parent in one call; each item may nest children. Returns JSON: {\"addedCount\":N,\"parentId\":\"…\",\"firstPosition\":N,\"siblingCount\":N,\"rootTopicIds\":[\"…\"]}."),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("ID of the parent topic")),
@@ -122,7 +122,8 @@ var toolDuplicateTopic = mcp.NewTool(
 	"xmind_duplicate_topic",
 	mcp.WithDescription(
 		"Deep-clone a topic and its subtree (same sheet only) and attach the copy as an attached child of target_parent_id. "+
-			"Sheet-level relationships are not copied. Hyperlinks or note text that reference other topic IDs by ID are not rewritten and may still point at the original topics.",
+			"Sheet-level relationships are not copied. Hyperlinks or note text that reference other topic IDs by ID are not rewritten and may still point at the original topics. "+
+			`Returns JSON: {"sourceId":"…","newRootId":"…","parentId":"…","copiedCount":N,"position":N,"siblingCount":N}.`,
 	),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet containing the source topic")),
@@ -150,7 +151,7 @@ var toolDeleteTopic = mcp.NewTool(
 
 var toolMoveTopic = mcp.NewTool(
 	"xmind_move_topic",
-	mcp.WithDescription("Move a topic (and subtree) to a new parent as an attached child. Use position to control insertion order; omit to append at the end."),
+	mcp.WithDescription("Move a topic (and subtree) to a new parent as an attached child. Use position to control insertion order; omit to append at the end. Returns JSON: {\"topicId\":\"…\",\"parentId\":\"…\",\"position\":N,\"siblingCount\":N}."),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to move")),

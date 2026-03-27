@@ -30,7 +30,7 @@ internal/
     tools.go              — tool definitions as package-level var declarations
     hooks.go              — MCP lifecycle hooks (before/after initialize)
     handler/
-      handler.go          — XMindHandler struct and shared utilities (textResult, etc.)
+      handler.go          — XMindHandler struct and shared utilities (textResult, jsonResult, etc.)
       handler_test.go     — tests for handler helpers (e.g. deepCloneTopic)
       sheets.go           — handlers for Tier 1: file & sheet management tools
       find.go             — handlers for Tier 2: search/find tools
@@ -176,6 +176,18 @@ func textResult(text string) *mcp.CallToolResult {
 }
 ```
 
+Use `jsonResult` when the successful response body should be JSON (e.g. structured data from mutating operations):
+
+```go
+func jsonResult(v any) (*mcp.CallToolResult, error) {
+    data, err := json.Marshal(v)
+    if err != nil {
+        return nil, fmt.Errorf("marshal response: %w", err)
+    }
+    return textResult(string(data)), nil
+}
+```
+
 ### Shared traversal and lookup utilities
 
 `handler.go` also defines helpers for navigating the topic tree. Use them rather than writing new traversal code:
@@ -238,7 +250,7 @@ Also verify that documentation reflects the change before finishing. Update **`A
 | Change made | What to review/update |
 |---|---|
 | New file added or removed | `Project Structure` tree in `AGENTS.md` |
-| New handler helper added to `handler.go` | Traversal/lookup utilities table in `AGENTS.md` |
+| New handler helper added to `handler.go` | Appropriate subsection in `AGENTS.md` (traversal/lookup table for tree helpers; Text response helper for `textResult` / `jsonResult`) |
 | New tool registered | Conventions section in `AGENTS.md` if a new pattern is introduced |
 | New struct field or codec allowlist entry | Schema Critical Notes in `AGENTS.md` |
 | New convention established | `Conventions` section in `AGENTS.md` |

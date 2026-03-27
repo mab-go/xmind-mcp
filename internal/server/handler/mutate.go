@@ -18,6 +18,36 @@ import (
 const maxBulkTopicsDepth = 64
 const maxBulkTopicsTotal = 10000
 
+type addTopicResponse struct {
+	ID           string `json:"id"`
+	Position     int    `json:"position"`
+	SiblingCount int    `json:"siblingCount"`
+}
+
+type addTopicsBulkResponse struct {
+	AddedCount    int      `json:"addedCount"`
+	ParentID      string   `json:"parentId"`
+	FirstPosition int      `json:"firstPosition"`
+	SiblingCount  int      `json:"siblingCount"`
+	RootTopicIDs  []string `json:"rootTopicIds"`
+}
+
+type duplicateTopicResponse struct {
+	SourceID     string `json:"sourceId"`
+	NewRootID    string `json:"newRootId"`
+	ParentID     string `json:"parentId"`
+	CopiedCount  int    `json:"copiedCount"`
+	Position     int    `json:"position"`
+	SiblingCount int    `json:"siblingCount"`
+}
+
+type moveTopicResponse struct {
+	TopicID      string `json:"topicId"`
+	ParentID     string `json:"parentId"`
+	Position     int    `json:"position"`
+	SiblingCount int    `json:"siblingCount"`
+}
+
 // plainToRealHTML converts a plain-text note string to minimal XMind-compatible HTML.
 // XMind's Notes struct requires both plain and realHTML to be populated; writing plain
 // text into realHTML directly causes the rich-text panel to display it unstyled and
@@ -372,7 +402,11 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 	if err := xmind.WriteMap(absPath, sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	return textResult(fmt.Sprintf("added topic id %s", topic.ID)), nil
+	return jsonResult(addTopicResponse{
+		ID:           topic.ID,
+		Position:     insertIdx,
+		SiblingCount: len(parent.Children.Attached),
+	})
 }
 
 // DuplicateTopic deep-clones a topic subtree and attaches it as an attached child of target_parent_id.
@@ -443,10 +477,14 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 	if err := xmind.WriteMap(absPath, sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	return textResult(fmt.Sprintf(
-		"duplicated topic %s as %s under %s (%d topics copied)",
-		topicID, newRootID, targetParentID, n,
-	)), nil
+	return jsonResult(duplicateTopicResponse{
+		SourceID:     topicID,
+		NewRootID:    newRootID,
+		ParentID:     targetParentID,
+		CopiedCount:  n,
+		Position:     insertIdx,
+		SiblingCount: len(targetParent.Children.Attached),
+	})
 }
 
 // AddTopicsBulk adds a nested tree under parent_id.
@@ -492,12 +530,23 @@ func (h *XMindHandler) AddTopicsBulk(ctx context.Context, req mcp.CallToolReques
 	}
 
 	ch := ensureChildren(parent)
+	prevLen := len(ch.Attached)
 	ch.Attached = append(ch.Attached, topics...)
+	rootIDs := make([]string, len(topics))
+	for i := range topics {
+		rootIDs[i] = topics[i].ID
+	}
 	sh.RevisionID = uuid.New().String()
 	if err := xmind.WriteMap(absPath, sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	return textResult(fmt.Sprintf("added %d topics under parent %s", count, parentID)), nil
+	return jsonResult(addTopicsBulkResponse{
+		AddedCount:    count,
+		ParentID:      parentID,
+		FirstPosition: prevLen,
+		SiblingCount:  len(ch.Attached),
+		RootTopicIDs:  rootIDs,
+	})
 }
 
 // RenameTopic sets a topic title.
@@ -679,7 +728,12 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	n := len(newParent.Children.Attached)
-	return textResult(fmt.Sprintf("moved topic %s to position %d under %s (%d attached children)", topicID, moveInsertIdx, newParentID, n)), nil
+	return jsonResult(moveTopicResponse{
+		TopicID:      topicID,
+		ParentID:     newParentID,
+		Position:     moveInsertIdx,
+		SiblingCount: n,
+	})
 }
 
 // ReorderChildren reorders attached children of parent_id.

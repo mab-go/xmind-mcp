@@ -27,6 +27,15 @@ func textResult(text string) *mcp.CallToolResult {
 	}
 }
 
+// jsonResult marshals v to JSON and returns it as the tool result text body.
+func jsonResult(v any) (*mcp.CallToolResult, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("marshal response: %w", err)
+	}
+	return textResult(string(data)), nil
+}
+
 // countTopics returns 1 (self) plus all descendants in attached, detached, and summary.
 func countTopics(t *xmind.Topic) int {
 	if t == nil {

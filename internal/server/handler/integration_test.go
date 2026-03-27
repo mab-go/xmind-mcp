@@ -184,7 +184,7 @@ func TestEdgeCase_UnicodeContent(t *testing.T) {
 	if addRes.IsError {
 		t.Fatal(textContent(t, addRes))
 	}
-	tid := strings.TrimPrefix(textContent(t, addRes), "added topic id ")
+	tid := parseAddTopicResult(t, addRes).ID
 	note := "Note: مرحبا • emoji 🚀"
 	res := callTool(t, h.SetTopicProperties, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
