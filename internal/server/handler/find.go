@@ -218,12 +218,13 @@ type searchTopicsResponse struct {
 }
 
 type searchTopicItem struct {
-	SheetID     string `json:"sheetId,omitempty"`
-	SheetTitle  string `json:"sheetTitle,omitempty"`
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	ParentTitle string `json:"parentTitle"`
-	Depth       int    `json:"depth"`
+	SheetID      string   `json:"sheetId,omitempty"`
+	SheetTitle   string   `json:"sheetTitle,omitempty"`
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	AncestryPath []string `json:"ancestryPath"`
+	ParentTitle  string   `json:"parentTitle"`
+	Depth        int      `json:"depth"`
 }
 
 // SearchTopics finds topics whose title contains the query (case-insensitive).
@@ -285,10 +286,11 @@ func (h *XMindHandler) SearchTopics(ctx context.Context, req mcp.CallToolRequest
 					pt = parent.Title
 				}
 				item := searchTopicItem{
-					ID:          t.ID,
-					Title:       t.Title,
-					ParentTitle: pt,
-					Depth:       depth,
+					ID:           t.ID,
+					Title:        t.Title,
+					AncestryPath: ancestryPath(&sh.RootTopic, t.ID),
+					ParentTitle:  pt,
+					Depth:        depth,
 				}
 				if allSheets {
 					item.SheetID = sh.ID
@@ -315,6 +317,7 @@ func (h *XMindHandler) SearchTopics(ctx context.Context, req mcp.CallToolRequest
 type findTopicResponse struct {
 	ID             string   `json:"id"`
 	Title          string   `json:"title"`
+	AncestryPath   []string `json:"ancestryPath"`
 	ParentTitle    string   `json:"parentTitle"`
 	SiblingTitles  []string `json:"siblingTitles"`
 	ChildrenTitles []string `json:"childrenTitles"`
@@ -442,8 +445,9 @@ func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (
 	}
 
 	resp := findTopicResponse{
-		ID:    found.ID,
-		Title: found.Title,
+		ID:           found.ID,
+		Title:        found.Title,
+		AncestryPath: ancestryPath(&sh.RootTopic, found.ID),
 	}
 	if foundParent != nil {
 		resp.ParentTitle = foundParent.Title

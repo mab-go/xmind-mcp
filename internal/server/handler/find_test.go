@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,6 +14,9 @@ const kitchenSinkAlphaTopicID = "169d72af-6345-47ad-90b0-5b587f1f9619"
 
 // Parent of "Alpha" on Sheet 1 - Mind Map.
 const kitchenSinkSubtopic1TopicID = "61cc4754-20ec-4479-9e58-f7eaa985520a"
+
+// Ancestry path from sheet root to parent of "Alpha" on Sheet 1 - Mind Map.
+var kitchenSinkAlphaAncestryPath = []string{"Central Topic", "Main Topic 1", "Subtopic 1"}
 
 const kitchenSinkSheet10Title = "Sheet 10 - Topic Properties"
 
@@ -132,6 +136,63 @@ func TestFindTopicKitchenSink(t *testing.T) {
 	if out.ID != kitchenSinkAlphaTopicID {
 		t.Fatalf("id: got %q want %q", out.ID, kitchenSinkAlphaTopicID)
 	}
+	if !slices.Equal(out.AncestryPath, kitchenSinkAlphaAncestryPath) {
+		t.Fatalf("ancestryPath: got %#v want %#v", out.AncestryPath, kitchenSinkAlphaAncestryPath)
+	}
+	if out.ParentTitle != kitchenSinkAlphaAncestryPath[len(kitchenSinkAlphaAncestryPath)-1] {
+		t.Fatalf("parentTitle should equal last ancestry segment: got %q", out.ParentTitle)
+	}
+}
+
+func TestFindTopicAncestryPathScopedStillAbsolute(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.FindTopic, map[string]any{
+		"path":      kitchenSinkPath(t),
+		"sheet_id":  sheetID,
+		"title":     "Alpha",
+		"parent_id": kitchenSinkSubtopic1TopicID,
+	})
+	if res.IsError {
+		t.Fatalf("FindTopic: %s", textContent(t, res))
+	}
+	var out findTopicResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !slices.Equal(out.AncestryPath, kitchenSinkAlphaAncestryPath) {
+		t.Fatalf("scoped search must still return sheet-root ancestry: got %#v want %#v", out.AncestryPath, kitchenSinkAlphaAncestryPath)
+	}
+}
+
+func TestSearchTopicsAncestryPath(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.SearchTopics, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": sheetID,
+		"query":    "alpha",
+	})
+	if res.IsError {
+		t.Fatalf("SearchTopics: %s", textContent(t, res))
+	}
+	var out searchTopicsResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var alpha *searchTopicItem
+	for i := range out.Matches {
+		if out.Matches[i].Title == "Alpha" {
+			alpha = &out.Matches[i]
+			break
+		}
+	}
+	if alpha == nil {
+		t.Fatalf("no Alpha in matches")
+	}
+	if !slices.Equal(alpha.AncestryPath, kitchenSinkAlphaAncestryPath) {
+		t.Fatalf("ancestryPath: got %#v want %#v", alpha.AncestryPath, kitchenSinkAlphaAncestryPath)
+	}
 }
 
 func TestGetSubtreeWithTopicID(t *testing.T) {
@@ -247,6 +308,9 @@ func TestSearchTopicsResponseShape(t *testing.T) {
 	}
 	if alpha.ParentTitle != "Subtopic 1" {
 		t.Fatalf("parentTitle: got %q want Subtopic 1", alpha.ParentTitle)
+	}
+	if !slices.Equal(alpha.AncestryPath, kitchenSinkAlphaAncestryPath) {
+		t.Fatalf("ancestryPath: got %#v want %#v", alpha.AncestryPath, kitchenSinkAlphaAncestryPath)
 	}
 	if alpha.Depth != 3 {
 		t.Fatalf("depth: got %d want 3", alpha.Depth)
@@ -525,8 +589,31 @@ func TestFindTopicParentIDSelfMatch(t *testing.T) {
 	if out.ParentTitle != "" {
 		t.Fatalf("parentTitle: got %q want empty (scope root matched)", out.ParentTitle)
 	}
+	if !slices.Equal(out.AncestryPath, kitchenSinkAlphaAncestryPath) {
+		t.Fatalf("ancestryPath must stay sheet-root-relative when scope root matches: got %#v want %#v", out.AncestryPath, kitchenSinkAlphaAncestryPath)
+	}
 	if len(out.SiblingTitles) != 0 {
 		t.Fatalf("expected no siblingTitles when scope root matches, got %#v", out.SiblingTitles)
+	}
+}
+
+func TestFindTopicSheetRootAncestryNil(t *testing.T) {
+	h := NewXMindHandler()
+	sheetID := firstKitchenSinkSheetID(t)
+	res := callTool(t, h.FindTopic, map[string]any{
+		"path":     kitchenSinkPath(t),
+		"sheet_id": sheetID,
+		"title":    "Central Topic",
+	})
+	if res.IsError {
+		t.Fatalf("FindTopic: %s", textContent(t, res))
+	}
+	var out findTopicResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.AncestryPath != nil {
+		t.Fatalf("sheet root match: want nil ancestryPath, got %#v", out.AncestryPath)
 	}
 }
 
