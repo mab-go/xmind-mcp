@@ -230,6 +230,328 @@ func TestAddTopicsBulkNested(t *testing.T) {
 	}
 }
 
+func TestAddTopicWithInlineMetadata(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.xmind")
+	res := callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "Root"})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := sheets[0].RootTopic.ID
+
+	const wantNote = "line1\nline2"
+	wantLink := "https://example.com/doc"
+	res = callTool(t, h.AddTopic, map[string]any{
+		"path":      path,
+		"sheet_id":  sheets[0].ID,
+		"parent_id": rootID,
+		"title":     "WithMeta",
+		"notes":     wantNote,
+		"labels":    []any{"a", "b"},
+		"markers":   []any{"priority-1", "task-done"},
+		"link":      wantLink,
+	})
+	if res.IsError {
+		t.Fatalf("AddTopic: %s", textContent(t, res))
+	}
+	added := parseAddTopicResult(t, res)
+	newID := added.ID
+
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic := findTopicByID(&sheets[0].RootTopic, newID)
+	if topic == nil {
+		t.Fatal("topic not found after add")
+	}
+	if topic.Title != "WithMeta" {
+		t.Fatalf("title: got %q", topic.Title)
+	}
+	if topic.Notes == nil || topic.Notes.Plain == nil || topic.Notes.Plain.Content != wantNote {
+		t.Fatalf("notes plain: %+v", topic.Notes)
+	}
+	if topic.Notes.RealHTML == nil || topic.Notes.RealHTML.Content == "" {
+		t.Fatalf("notes realHTML missing: %+v", topic.Notes)
+	}
+	if len(topic.Labels) != 2 || topic.Labels[0] != "a" || topic.Labels[1] != "b" {
+		t.Fatalf("labels: %+v", topic.Labels)
+	}
+	if len(topic.Markers) != 2 || topic.Markers[0].MarkerID != "priority-1" || topic.Markers[1].MarkerID != "task-done" {
+		t.Fatalf("markers: %+v", topic.Markers)
+	}
+	if topic.Href != wantLink {
+		t.Fatalf("href: got %q want %q", topic.Href, wantLink)
+	}
+}
+
+func TestAddTopicsBulkWithPerTopicMetadata(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulk-meta.xmind")
+	res := callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := sheets[0].RootTopic.ID
+
+	topics := []any{
+		map[string]any{
+			"title": "Parent",
+			"notes": "parent note",
+			"children": []any{
+				map[string]any{
+					"title":   "Child",
+					"markers": []any{"task-ongoing"},
+				},
+			},
+		},
+	}
+	res = callTool(t, h.AddTopicsBulk, map[string]any{
+		"path":      path,
+		"sheet_id":  sheets[0].ID,
+		"parent_id": rootID,
+		"topics":    topics,
+	})
+	if res.IsError {
+		t.Fatalf("AddTopicsBulk: %s", textContent(t, res))
+	}
+	bulk := parseAddTopicsBulkResult(t, res)
+	if bulk.AddedCount != 2 {
+		t.Fatalf("addedCount: got %d want 2", bulk.AddedCount)
+	}
+
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := sheets[0].RootTopic
+	if rt.Children == nil || len(rt.Children.Attached) != 1 {
+		t.Fatal("expected one top-level branch")
+	}
+	parent := &rt.Children.Attached[0]
+	if parent.Title != "Parent" || parent.Notes == nil || parent.Notes.Plain == nil || parent.Notes.Plain.Content != "parent note" {
+		t.Fatalf("parent metadata: %+v", parent)
+	}
+	if parent.Children == nil || len(parent.Children.Attached) != 1 {
+		t.Fatal("expected one child")
+	}
+	child := &parent.Children.Attached[0]
+	if child.Title != "Child" || len(child.Markers) != 1 || child.Markers[0].MarkerID != "task-ongoing" {
+		t.Fatalf("child metadata: %+v", child)
+	}
+}
+
+func TestAddTopicsBulkMalformedMarkersToolError(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulk-bad.xmind")
+	res := callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := sheets[0].RootTopic.ID
+
+	res = callTool(t, h.AddTopicsBulk, map[string]any{
+		"path":      path,
+		"sheet_id":  sheets[0].ID,
+		"parent_id": rootID,
+		"topics": []any{
+			map[string]any{
+				"title":   "T",
+				"markers": []any{"ok", 42},
+			},
+		},
+	})
+	if !res.IsError {
+		t.Fatalf("expected tool error, got: %s", textContent(t, res))
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "markers[1]") {
+		t.Fatalf("expected markers index in error, got: %q", msg)
+	}
+}
+
+func TestAddTopicsBulkNestedMalformedMarkersToolError(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulk-nested-bad.xmind")
+	res := callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := sheets[0].RootTopic.ID
+
+	res = callTool(t, h.AddTopicsBulk, map[string]any{
+		"path":      path,
+		"sheet_id":  sheets[0].ID,
+		"parent_id": rootID,
+		"topics": []any{
+			map[string]any{
+				"title": "P",
+				"children": []any{
+					map[string]any{
+						"title":   "C",
+						"markers": []any{"ok", 42},
+					},
+				},
+			},
+		},
+	})
+	if !res.IsError {
+		t.Fatalf("expected tool error, got: %s", textContent(t, res))
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "markers[1]") {
+		t.Fatalf("expected markers index in error, got: %q", msg)
+	}
+}
+
+func TestAddTopicInvalidNotesType(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad-notes.xmind")
+	res := callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := sheets[0].RootTopic.ID
+
+	res = callTool(t, h.AddTopic, map[string]any{
+		"path":      path,
+		"sheet_id":  sheets[0].ID,
+		"parent_id": rootID,
+		"title":     "T",
+		"notes":     123,
+	})
+	if !res.IsError {
+		t.Fatalf("expected tool error, got: %s", textContent(t, res))
+	}
+	if !strings.Contains(textContent(t, res), "invalid argument notes") {
+		t.Fatalf("expected notes error, got: %q", textContent(t, res))
+	}
+}
+
+func TestAddTopicInvalidLabelsElement(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad-labels.xmind")
+	res := callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := sheets[0].RootTopic.ID
+
+	res = callTool(t, h.AddTopic, map[string]any{
+		"path":      path,
+		"sheet_id":  sheets[0].ID,
+		"parent_id": rootID,
+		"title":     "T",
+		"labels":    []any{"a", 1},
+	})
+	if !res.IsError {
+		t.Fatalf("expected tool error, got: %s", textContent(t, res))
+	}
+	msg := textContent(t, res)
+	if !strings.Contains(msg, "labels[1]") {
+		t.Fatalf("expected labels index in error, got: %q", msg)
+	}
+}
+
+func TestAddTopicInvalidLinkType(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad-link.xmind")
+	res := callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := sheets[0].RootTopic.ID
+
+	res = callTool(t, h.AddTopic, map[string]any{
+		"path":      path,
+		"sheet_id":  sheets[0].ID,
+		"parent_id": rootID,
+		"title":     "T",
+		"link":      99,
+	})
+	if !res.IsError {
+		t.Fatalf("expected tool error, got: %s", textContent(t, res))
+	}
+	if !strings.Contains(textContent(t, res), "invalid argument link") {
+		t.Fatalf("expected link error, got: %q", textContent(t, res))
+	}
+}
+
+func TestAddTopicInlineRemoveMarkers(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "remove-m.xmind")
+	res := callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := sheets[0].RootTopic.ID
+
+	res = callTool(t, h.AddTopic, map[string]any{
+		"path":           path,
+		"sheet_id":       sheets[0].ID,
+		"parent_id":      rootID,
+		"title":          "M",
+		"markers":        []any{"priority-1", "task-done"},
+		"remove_markers": []any{"priority-1"},
+	})
+	if res.IsError {
+		t.Fatalf("AddTopic: %s", textContent(t, res))
+	}
+	added := parseAddTopicResult(t, res)
+
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic := findTopicByID(&sheets[0].RootTopic, added.ID)
+	if topic == nil {
+		t.Fatal("topic not found")
+	}
+	if len(topic.Markers) != 1 || topic.Markers[0].MarkerID != "task-done" {
+		t.Fatalf("markers: %+v", topic.Markers)
+	}
+}
+
 func TestRenameTopic(t *testing.T) {
 	h := NewXMindHandler()
 	dir := t.TempDir()
