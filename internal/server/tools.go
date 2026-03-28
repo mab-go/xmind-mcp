@@ -73,7 +73,8 @@ var toolSearchTopics = mcp.NewTool(
 	"xmind_search_topics",
 	mcp.WithDescription(
 		"Search topics by keyword (case-insensitive substring). "+
-			"Omit sheet_id to search all sheets; results will include sheetId and sheetTitle fields.",
+			"Omit sheet_id to search all sheets; results will include sheetId and sheetTitle fields. "+
+			"Each match includes ancestryPath: titles from the sheet root down to (but not including) the matched topic, or null when the match is the sheet root.",
 	),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Description("Sheet to search; omit or null to search all sheets")),
@@ -88,6 +89,7 @@ var toolFindTopic = mcp.NewTool(
 			"it is not the structural parent used by xmind_add_topic and other write tools. "+
 			"Omit parent_id or null for the whole sheet. The scope root is visited first, so it can match if its title equals the search title; "+
 			"parentTitle and siblingTitles are relative to that walk, so they are empty when the match is the scope root. "+
+			"ancestryPath lists titles from the sheet root down to (but not including) the matched topic; it is always sheet-root-relative, not relative to parent_id scope, and is null when the match is the sheet root. "+
 			"Use xmind_search_topics for substring or cross-sheet search.",
 	),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),

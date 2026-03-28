@@ -49,3 +49,32 @@ func TestDeepCloneTopicRemapSummaryAndBoundaryIDs(t *testing.T) {
 		t.Fatalf("summary range should be preserved, got %q", clone.Summaries[0].Range)
 	}
 }
+
+func TestAncestryPathHelper(t *testing.T) {
+	root := &xmind.Topic{ID: "r", Title: "Root"}
+	if p := ancestryPath(root, root.ID); p != nil {
+		t.Fatalf("root target: want nil, got %#v", p)
+	}
+	if p := ancestryPath(root, "no-such-id"); p != nil {
+		t.Fatalf("missing id: want nil, got %#v", p)
+	}
+
+	child := &xmind.Topic{ID: "c", Title: "Child"}
+	root.Children = &xmind.Children{Attached: []xmind.Topic{*child}}
+	if got := ancestryPath(root, "c"); len(got) != 1 || got[0] != "Root" {
+		t.Fatalf("direct child: got %#v", got)
+	}
+
+	deep := &xmind.Topic{ID: "d", Title: "Deep"}
+	root.Children.Attached[0].Children = &xmind.Children{Attached: []xmind.Topic{*deep}}
+	if got := ancestryPath(root, "d"); len(got) != 2 || got[0] != "Root" || got[1] != "Child" {
+		t.Fatalf("deeper node: got %#v", got)
+	}
+
+	// Detached branch: second list after attached
+	det := &xmind.Topic{ID: "det", Title: "Float"}
+	root.Children.Detached = []xmind.Topic{*det}
+	if got := ancestryPath(root, "det"); len(got) != 1 || got[0] != "Root" {
+		t.Fatalf("detached child: got %#v", got)
+	}
+}

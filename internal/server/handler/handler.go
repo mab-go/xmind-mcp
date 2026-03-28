@@ -134,6 +134,47 @@ func findTopicByID(root *xmind.Topic, id string) *xmind.Topic {
 	return found
 }
 
+// ancestryPath returns titles from root down to (but not including) the target topic.
+// Returns nil if targetID is the root itself or not found.
+// NOTE: does a full DFS per call; fine for typical map sizes (<1000 topics).
+// If performance becomes a concern, build a parent-ID map in one pass instead.
+func ancestryPath(root *xmind.Topic, targetID string) []string {
+	var path []string
+	if buildAncestryPath(root, targetID, &path) {
+		return path
+	}
+	return nil
+}
+
+func buildAncestryPath(current *xmind.Topic, targetID string, path *[]string) bool {
+	if current == nil {
+		return false
+	}
+	if current.ID == targetID {
+		return true
+	}
+	*path = append(*path, current.Title)
+	if current.Children != nil {
+		for i := range current.Children.Attached {
+			if buildAncestryPath(&current.Children.Attached[i], targetID, path) {
+				return true
+			}
+		}
+		for i := range current.Children.Detached {
+			if buildAncestryPath(&current.Children.Detached[i], targetID, path) {
+				return true
+			}
+		}
+		for i := range current.Children.Summary {
+			if buildAncestryPath(&current.Children.Summary[i], targetID, path) {
+				return true
+			}
+		}
+	}
+	*path = (*path)[:len(*path)-1]
+	return false
+}
+
 // walkTopics visits topic in preorder depth-first: attached, then detached, then summary.
 // fn returns false to stop the walk entirely. walkTopics returns false if the walk was stopped early.
 func walkTopics(topic *xmind.Topic, depth int, parent *xmind.Topic, fn func(t *xmind.Topic, depth int, parent *xmind.Topic) bool) bool {

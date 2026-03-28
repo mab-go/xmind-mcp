@@ -196,6 +196,7 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 |---|---|
 | `walkTopics(root, depth, parent, fn)` | Preorder DFS over attached → detached → summary; `fn` returns `false` to stop |
 | `findTopicByID(root, id)` | First topic matching `id` in DFS order |
+| `ancestryPath(root, targetID)` | Titles from root to (not including) the target; `nil` if target is root or not found |
 | `findParentOfTopic(root, targetID)` | Parent topic, child index, and list name (`"attached"`, `"detached"`, `"summary"`) |
 | `isDescendantOf(ancestor, descendantID)` | Reports whether a node is the ancestor or any node in its subtree |
 | `countTopics(t)` | Total node count for a subtree (self + all descendants) |
