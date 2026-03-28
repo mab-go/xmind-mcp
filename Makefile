@@ -98,7 +98,8 @@ install: ## Run go install with same ldflags (installs to GOPATH/bin or GOBIN)
 run: ## Run via go run (optional: ARGS="--flags")
 	go run -ldflags "$(LDFLAGS)" ./cmd/xmind-mcp $(ARGS)
 
-gen-example: ## Generate example mind map to ./example.xmind (override: OUT=path/to/file.xmind)
+OUT ?= docs/example.xmind
+gen-example: ## Generate example mind map to docs/example.xmind (override: OUT=path/to/file.xmind)
 	go run ./cmd/gen-example $(OUT)
 
 #------------------------------------------------------------------------------
