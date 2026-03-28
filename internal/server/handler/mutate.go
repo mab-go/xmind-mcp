@@ -73,36 +73,40 @@ func plainToRealHTML(s string) string {
 }
 
 // buildTopicsFromArgs parses MCP topics array into a forest of Topic values with fresh UUIDs.
-// Each element is a map with required "title" and optional "children" ([]any).
-func buildTopicsFromArgs(raw []any) ([]xmind.Topic, int, error) {
+// Each element is a map with required "title", optional "children" ([]any), and optional
+// metadata keys (notes, labels, markers, link, remove_markers) handled by applyTopicPropertiesArgs.
+func buildTopicsFromArgs(raw []any) ([]xmind.Topic, int, *mcp.CallToolResult, error) {
 	var total int
-	out, err := buildTopicsFromArgsDepth(raw, 0, &total)
-	if err != nil {
-		return nil, 0, err
+	out, toolRes, err := buildTopicsFromArgsDepth(raw, 0, &total)
+	if toolRes != nil {
+		return nil, 0, toolRes, nil
 	}
-	return out, total, nil
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	return out, total, nil, nil
 }
 
-func buildTopicsFromArgsDepth(raw []any, depth int, total *int) ([]xmind.Topic, error) {
+func buildTopicsFromArgsDepth(raw []any, depth int, total *int) ([]xmind.Topic, *mcp.CallToolResult, error) {
 	if depth > maxBulkTopicsDepth {
-		return nil, fmt.Errorf("maximum nesting depth is %d", maxBulkTopicsDepth)
+		return nil, nil, fmt.Errorf("maximum nesting depth is %d", maxBulkTopicsDepth)
 	}
 	out := make([]xmind.Topic, 0, len(raw))
 	for i, item := range raw {
 		m, ok := item.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("topics[%d]: expected object", i)
+			return nil, nil, fmt.Errorf("topics[%d]: expected object", i)
 		}
 		titleVal, ok := m["title"]
 		if !ok {
-			return nil, fmt.Errorf("topics[%d]: missing title", i)
+			return nil, nil, fmt.Errorf("topics[%d]: missing title", i)
 		}
 		title, ok := titleVal.(string)
 		if !ok {
-			return nil, fmt.Errorf("topics[%d]: title must be a string", i)
+			return nil, nil, fmt.Errorf("topics[%d]: title must be a string", i)
 		}
 		if *total >= maxBulkTopicsTotal {
-			return nil, fmt.Errorf("maximum topic count is %d", maxBulkTopicsTotal)
+			return nil, nil, fmt.Errorf("maximum topic count is %d", maxBulkTopicsTotal)
 		}
 		topic := xmind.Topic{
 			ID:    uuid.New().String(),
@@ -112,17 +116,23 @@ func buildTopicsFromArgsDepth(raw []any, depth int, total *int) ([]xmind.Topic, 
 		if ch, has := m["children"]; has && ch != nil {
 			arr, ok := ch.([]any)
 			if !ok {
-				return nil, fmt.Errorf("topics[%d]: children must be an array", i)
+				return nil, nil, fmt.Errorf("topics[%d]: children must be an array", i)
 			}
-			children, err := buildTopicsFromArgsDepth(arr, depth+1, total)
+			children, toolErr, err := buildTopicsFromArgsDepth(arr, depth+1, total)
+			if toolErr != nil {
+				return nil, toolErr, nil
+			}
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			topic.Children = &xmind.Children{Attached: children}
 		}
+		if toolResult := applyTopicPropertiesArgs(m, &topic); toolResult != nil {
+			return nil, toolResult, nil
+		}
 		out = append(out, topic)
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 func parseSummaryRange(r string) (from, to int, ok bool) {
@@ -386,6 +396,9 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 		ID:    uuid.New().String(),
 		Title: title,
 	}
+	if toolResult := applyTopicPropertiesArgs(args, &topic); toolResult != nil {
+		return toolResult, nil
+	}
 	if terr := insertAttached(parent, topic, pos); terr != nil {
 		return terr, nil
 	}
@@ -508,7 +521,10 @@ func (h *XMindHandler) AddTopicsBulk(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError("missing or invalid argument: topics (expected array)"), nil
 	}
 
-	topics, count, perr := buildTopicsFromArgs(rawTopics)
+	topics, count, topicsToolErr, perr := buildTopicsFromArgs(rawTopics)
+	if topicsToolErr != nil {
+		return topicsToolErr, nil
+	}
 	if perr != nil {
 		return mcp.NewToolResultError("invalid argument topics: " + perr.Error()), nil
 	}

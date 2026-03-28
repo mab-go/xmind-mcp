@@ -101,21 +101,34 @@ var toolFindTopic = mcp.NewTool(
 
 var toolAddTopic = mcp.NewTool(
 	"xmind_add_topic",
-	mcp.WithDescription("Add a new attached child topic under a parent topic. Returns JSON: {\"id\":\"…\",\"position\":N,\"siblingCount\":N}."),
+	mcp.WithDescription(
+		"Add a new attached child topic under a parent topic. Optional metadata (notes, labels, markers, link, remove_markers) can be set inline with the same semantics as xmind_set_topic_properties; "+
+			"remove_markers is applied after markers when both are set. Otherwise use xmind_set_topic_properties. Returns JSON: {\"id\":\"…\",\"position\":N,\"siblingCount\":N}.",
+	),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("ID of the parent topic")),
 	mcp.WithString("title", mcp.Required(), mcp.Description("Title of the new topic")),
 	mcp.WithNumber("position", mcp.Description("Sibling index to insert at; omit to append")),
+	mcp.WithString("notes", mcp.Description("Plain text note; same semantics as xmind_set_topic_properties")),
+	mcp.WithArray("labels", mcp.Description("List of label strings; empty array sets no labels")),
+	mcp.WithArray("markers", mcp.Description(`Marker ID list, e.g. "priority-1", "task-done"`)),
+	mcp.WithArray("remove_markers", mcp.Description(`Marker IDs to remove after any markers replace; empty array removes nothing; omit or null leaves markers unchanged; applied after markers when both are set`)),
+	mcp.WithString("link", mcp.Description("URL, file path, or topic link href")),
 )
 
 var toolAddTopicsBulk = mcp.NewTool(
 	"xmind_add_topics_bulk",
-	mcp.WithDescription("Add multiple topics under a parent in one call; each item may nest children. Returns JSON: {\"addedCount\":N,\"parentId\":\"…\",\"firstPosition\":N,\"siblingCount\":N,\"rootTopicIds\":[\"…\"]}."),
+	mcp.WithDescription(
+		"Add multiple topics under a parent in one call; each item may nest children. Each topic object may include optional notes, labels, markers, link, and remove_markers (same semantics as xmind_set_topic_properties; remove_markers after markers when both are set). "+
+			`Returns JSON: {"addedCount":N,"parentId":"…","firstPosition":N,"siblingCount":N,"rootTopicIds":["…"]}.`,
+	),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("ID of the parent topic")),
-	mcp.WithArray("topics", mcp.Required(), mcp.Description(`Array of {title, children?} objects`)),
+	mcp.WithArray("topics", mcp.Required(), mcp.Description(
+		`Array of topic objects. Each object: {"title":"…","children":[…],"notes":"…","labels":[…],"markers":[…],"remove_markers":[…],"link":"…"}. Only title is required; children nests recursively.`,
+	)),
 )
 
 var toolDuplicateTopic = mcp.NewTool(
