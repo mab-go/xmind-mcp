@@ -6,7 +6,7 @@ This file is the authoritative briefing for any AI agent working on this project
 
 ## Project Summary
 
-`xmind-mcp` is a Go MCP server that provides tools for reading and writing local XMind mind map files (`.xmind`). The module path is `github.com/mab-go/xmind-mcp` and the project lives at `/home/matt/Projects/mcp/xmind-mcp`.
+`xmind-mcp` is a Go MCP server that provides tools for reading and writing local XMind mind map files (`.xmind`). The module path is `github.com/mab-go/xmind-mcp`.
 
 ---
 
