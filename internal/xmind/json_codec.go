@@ -50,6 +50,12 @@ func jsonValueIsPresent(raw json.RawMessage) bool {
 	return len(raw) > 0 && !bytes.Equal(raw, []byte("null"))
 }
 
+func unmarshalFieldSilent(raw map[string]json.RawMessage, key string, dst any) {
+	if v, ok := raw[key]; ok {
+		_ = json.Unmarshal(v, dst)
+	}
+}
+
 // marshalJSONNoHTMLEscape marshals v like json.Marshal but disables HTML-sensitive
 // escaping of &, <, and > so content.json matches XMind's on-disk style (literal
 // characters inside JSON strings, not \u0026 / \u003c / \u003e).
@@ -166,6 +172,32 @@ func (b *Boundary) MarshalJSON() ([]byte, error) {
 
 // --- Relationship ---
 
+func decodeRelationshipScalars(r *Relationship, raw map[string]json.RawMessage) {
+	unmarshalFieldSilent(raw, "id", &r.ID)
+	unmarshalFieldSilent(raw, "end1Id", &r.End1ID)
+	unmarshalFieldSilent(raw, "end2Id", &r.End2ID)
+	unmarshalFieldSilent(raw, "title", &r.Title)
+}
+
+func unmarshalRelationshipControlPoints(v json.RawMessage) (map[string]Position, error) {
+	var cp map[string]json.RawMessage
+	if err := json.Unmarshal(v, &cp); err != nil {
+		return nil, err
+	}
+	if len(cp) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]Position, len(cp))
+	for k, rv := range cp {
+		var p Position
+		if err := json.Unmarshal(rv, &p); err != nil {
+			return nil, err
+		}
+		out[k] = p
+	}
+	return out, nil
+}
+
 // UnmarshalJSON implements json.Unmarshaler.
 func (r *Relationship) UnmarshalJSON(data []byte) error {
 	raw, err := unmarshalObjectMap(data)
@@ -174,32 +206,14 @@ func (r *Relationship) UnmarshalJSON(data []byte) error {
 	}
 	ex := cloneJSONMap(raw)
 	deleteKeys(ex, "id", "end1Id", "end2Id", "title", "controlPoints")
-	if v, ok := raw["id"]; ok {
-		_ = json.Unmarshal(v, &r.ID)
-	}
-	if v, ok := raw["end1Id"]; ok {
-		_ = json.Unmarshal(v, &r.End1ID)
-	}
-	if v, ok := raw["end2Id"]; ok {
-		_ = json.Unmarshal(v, &r.End2ID)
-	}
-	if v, ok := raw["title"]; ok {
-		_ = json.Unmarshal(v, &r.Title)
-	}
+	decodeRelationshipScalars(r, raw)
 	if v, ok := raw["controlPoints"]; ok {
-		var cp map[string]json.RawMessage
-		if err := json.Unmarshal(v, &cp); err != nil {
-			return err
+		cp, errCP := unmarshalRelationshipControlPoints(v)
+		if errCP != nil {
+			return errCP
 		}
-		if len(cp) > 0 {
-			r.ControlPoints = make(map[string]Position, len(cp))
-			for k, rv := range cp {
-				var p Position
-				if err := json.Unmarshal(rv, &p); err != nil {
-					return err
-				}
-				r.ControlPoints[k] = p
-			}
+		if cp != nil {
+			r.ControlPoints = cp
 		}
 	}
 	r.extra = ex
@@ -329,6 +343,73 @@ var topicKnownKeys = []string{
 
 // --- Topic ---
 
+func unmarshalTopicOptionalImage(t *Topic, raw map[string]json.RawMessage) error {
+	v, ok := raw["image"]
+	if !ok || !jsonValueIsPresent(v) {
+		return nil
+	}
+	var img TopicImage
+	if err := json.Unmarshal(v, &img); err != nil {
+		return err
+	}
+	t.Image = &img
+	return nil
+}
+
+func unmarshalTopicOptionalNotes(t *Topic, raw map[string]json.RawMessage) error {
+	v, ok := raw["notes"]
+	if !ok || !jsonValueIsPresent(v) {
+		return nil
+	}
+	var n Notes
+	if err := json.Unmarshal(v, &n); err != nil {
+		return err
+	}
+	t.Notes = &n
+	return nil
+}
+
+func unmarshalTopicOptionalChildren(t *Topic, raw map[string]json.RawMessage) error {
+	v, ok := raw["children"]
+	if !ok || !jsonValueIsPresent(v) {
+		return nil
+	}
+	var ch Children
+	if err := json.Unmarshal(v, &ch); err != nil {
+		return err
+	}
+	t.Children = &ch
+	return nil
+}
+
+func unmarshalTopicOptionalPosition(t *Topic, raw map[string]json.RawMessage) error {
+	v, ok := raw["position"]
+	if !ok || !jsonValueIsPresent(v) {
+		return nil
+	}
+	var pos Position
+	if err := json.Unmarshal(v, &pos); err != nil {
+		return err
+	}
+	t.Position = &pos
+	return nil
+}
+
+func decodeTopicSilentFields(t *Topic, raw map[string]json.RawMessage) {
+	unmarshalFieldSilent(raw, "id", &t.ID)
+	unmarshalFieldSilent(raw, "class", &t.Class)
+	unmarshalFieldSilent(raw, "title", &t.Title)
+	unmarshalFieldSilent(raw, "titleUnedited", &t.TitleUnedited)
+	unmarshalFieldSilent(raw, "attributedTitle", &t.AttributedTitle)
+	unmarshalFieldSilent(raw, "structureClass", &t.StructureClass)
+	unmarshalFieldSilent(raw, "labels", &t.Labels)
+	unmarshalFieldSilent(raw, "markers", &t.Markers)
+	unmarshalFieldSilent(raw, "href", &t.Href)
+	unmarshalFieldSilent(raw, "boundaries", &t.Boundaries)
+	unmarshalFieldSilent(raw, "extensions", &t.Extensions)
+	unmarshalFieldSilent(raw, "summaries", &t.Summaries)
+}
+
 // UnmarshalJSON implements json.Unmarshaler.
 func (t *Topic) UnmarshalJSON(data []byte) error {
 	raw, err := unmarshalObjectMap(data)
@@ -337,69 +418,18 @@ func (t *Topic) UnmarshalJSON(data []byte) error {
 	}
 	ex := cloneJSONMap(raw)
 	deleteKeys(ex, topicKnownKeys...)
-	if v, ok := raw["id"]; ok {
-		_ = json.Unmarshal(v, &t.ID)
+	decodeTopicSilentFields(t, raw)
+	if err := unmarshalTopicOptionalImage(t, raw); err != nil {
+		return err
 	}
-	if v, ok := raw["class"]; ok {
-		_ = json.Unmarshal(v, &t.Class)
+	if err := unmarshalTopicOptionalNotes(t, raw); err != nil {
+		return err
 	}
-	if v, ok := raw["title"]; ok {
-		_ = json.Unmarshal(v, &t.Title)
+	if err := unmarshalTopicOptionalChildren(t, raw); err != nil {
+		return err
 	}
-	if v, ok := raw["titleUnedited"]; ok {
-		_ = json.Unmarshal(v, &t.TitleUnedited)
-	}
-	if v, ok := raw["attributedTitle"]; ok {
-		_ = json.Unmarshal(v, &t.AttributedTitle)
-	}
-	if v, ok := raw["structureClass"]; ok {
-		_ = json.Unmarshal(v, &t.StructureClass)
-	}
-	if v, ok := raw["labels"]; ok {
-		_ = json.Unmarshal(v, &t.Labels)
-	}
-	if v, ok := raw["markers"]; ok {
-		_ = json.Unmarshal(v, &t.Markers)
-	}
-	if v, ok := raw["href"]; ok {
-		_ = json.Unmarshal(v, &t.Href)
-	}
-	if v, ok := raw["image"]; ok && jsonValueIsPresent(v) {
-		var img TopicImage
-		if err := json.Unmarshal(v, &img); err != nil {
-			return err
-		}
-		t.Image = &img
-	}
-	if v, ok := raw["notes"]; ok && jsonValueIsPresent(v) {
-		var n Notes
-		if err := json.Unmarshal(v, &n); err != nil {
-			return err
-		}
-		t.Notes = &n
-	}
-	if v, ok := raw["children"]; ok && jsonValueIsPresent(v) {
-		var ch Children
-		if err := json.Unmarshal(v, &ch); err != nil {
-			return err
-		}
-		t.Children = &ch
-	}
-	if v, ok := raw["boundaries"]; ok {
-		_ = json.Unmarshal(v, &t.Boundaries)
-	}
-	if v, ok := raw["extensions"]; ok {
-		_ = json.Unmarshal(v, &t.Extensions)
-	}
-	if v, ok := raw["summaries"]; ok {
-		_ = json.Unmarshal(v, &t.Summaries)
-	}
-	if v, ok := raw["position"]; ok && jsonValueIsPresent(v) {
-		var pos Position
-		if err := json.Unmarshal(v, &pos); err != nil {
-			return err
-		}
-		t.Position = &pos
+	if err := unmarshalTopicOptionalPosition(t, raw); err != nil {
+		return err
 	}
 	t.extra = ex
 	return nil
@@ -452,6 +482,29 @@ var sheetKnownKeys = []string{
 
 // --- Sheet ---
 
+func decodeSheetRootTopic(s *Sheet, v json.RawMessage) error {
+	return json.Unmarshal(v, &s.RootTopic)
+}
+
+func decodeSheetRawBlobs(s *Sheet, raw map[string]json.RawMessage) {
+	if v, ok := raw["extensions"]; ok {
+		s.Extensions = append(json.RawMessage(nil), v...)
+	}
+	if v, ok := raw["theme"]; ok {
+		s.Theme = append(json.RawMessage(nil), v...)
+	}
+}
+
+func decodeSheetScalars(s *Sheet, raw map[string]json.RawMessage) {
+	unmarshalFieldSilent(raw, "id", &s.ID)
+	unmarshalFieldSilent(raw, "revisionId", &s.RevisionID)
+	unmarshalFieldSilent(raw, "class", &s.Class)
+	unmarshalFieldSilent(raw, "title", &s.Title)
+	unmarshalFieldSilent(raw, "topicOverlapping", &s.TopicOverlapping)
+	unmarshalFieldSilent(raw, "relationships", &s.Relationships)
+	unmarshalFieldSilent(raw, "labelSortOrder", &s.LabelSortOrder)
+}
+
 // UnmarshalJSON implements json.Unmarshaler.
 func (s *Sheet) UnmarshalJSON(data []byte) error {
 	raw, err := unmarshalObjectMap(data)
@@ -460,37 +513,12 @@ func (s *Sheet) UnmarshalJSON(data []byte) error {
 	}
 	ex := cloneJSONMap(raw)
 	deleteKeys(ex, sheetKnownKeys...)
-	if v, ok := raw["id"]; ok {
-		_ = json.Unmarshal(v, &s.ID)
-	}
-	if v, ok := raw["revisionId"]; ok {
-		_ = json.Unmarshal(v, &s.RevisionID)
-	}
-	if v, ok := raw["class"]; ok {
-		_ = json.Unmarshal(v, &s.Class)
-	}
-	if v, ok := raw["title"]; ok {
-		_ = json.Unmarshal(v, &s.Title)
-	}
-	if v, ok := raw["topicOverlapping"]; ok {
-		_ = json.Unmarshal(v, &s.TopicOverlapping)
-	}
+	decodeSheetScalars(s, raw)
+	decodeSheetRawBlobs(s, raw)
 	if v, ok := raw["rootTopic"]; ok {
-		if err := json.Unmarshal(v, &s.RootTopic); err != nil {
+		if err := decodeSheetRootTopic(s, v); err != nil {
 			return err
 		}
-	}
-	if v, ok := raw["relationships"]; ok {
-		_ = json.Unmarshal(v, &s.Relationships)
-	}
-	if v, ok := raw["extensions"]; ok {
-		s.Extensions = append(json.RawMessage(nil), v...)
-	}
-	if v, ok := raw["theme"]; ok {
-		s.Theme = append(json.RawMessage(nil), v...)
-	}
-	if v, ok := raw["labelSortOrder"]; ok {
-		_ = json.Unmarshal(v, &s.LabelSortOrder)
 	}
 	s.extra = ex
 	return nil
