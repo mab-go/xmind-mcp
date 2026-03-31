@@ -8,11 +8,14 @@ MODULE      := github.com/mab-go/xmind-mcp
 VERSION_PKG := $(MODULE)/internal/version
 GOLANGCI    := $(BIN)/golangci-lint
 GOIMPORTS   := $(BIN)/goimports
+GOCYCLO     := $(BIN)/gocyclo
 # Pinned golangci-lint release for reproducible `make lint`; bump if unsupported on current Go (see go.mod).
 # v2.6.x binaries were built with Go 1.25 and reject go.mod go 1.26+; use v2.9+ for Go 1.26 toolchains.
 GOLANGCI_LINT_VERSION ?= v2.11.3
 # Pinned goimports (golang.org/x/tools); bump if `make fmt` fails or is incompatible with go.mod Go version.
 GOIMPORTS_VERSION ?= v0.38.0
+# Pinned gocyclo (github.com/fzipp/gocyclo); bump for `make cyclo` reproducibility.
+GOCYCLO_VERSION ?= v0.6.0
 
 # golangci-lint must be built with Go >= go.mod; auto follows deps' older go version, so pin to module Go.
 GO_MOD_VERSION := $(shell grep -E '^go ' go.mod | head -1 | awk '{print $$2}')
@@ -33,7 +36,7 @@ OPEN ?= $(shell command -v xdg-open 2>/dev/null || echo "open")
         setup \
         build install run gen-example \
         test test\:cover \
-        lint lint\:fix fmt vet \
+        lint lint\:fix fmt vet cyclo \
         mod\:tidy mod\:verify \
         clean clean\:cache clean\:all \
         versions
@@ -72,12 +75,13 @@ help: ## Show available commands
 # Setup
 #------------------------------------------------------------------------------
 
-setup: ## Install golangci-lint and goimports into ./bin (project-local)
+setup: ## Install required Go tools into ./bin (project-local)
 	@mkdir -p $(BIN)
 	GOTOOLCHAIN=$(TOOLCHAIN_FOR_TOOLS) GOBIN=$(abspath $(BIN)) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	GOTOOLCHAIN=$(TOOLCHAIN_FOR_TOOLS) GOBIN=$(abspath $(BIN)) go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
+	GOTOOLCHAIN=$(TOOLCHAIN_FOR_TOOLS) GOBIN=$(abspath $(BIN)) go install github.com/fzipp/gocyclo/cmd/gocyclo@$(GOCYCLO_VERSION)
 	@echo ""
-	@echo "Setup complete: $(GOLANGCI), $(GOIMPORTS)"
+	@echo "Setup complete: $(GOLANGCI), $(GOIMPORTS), $(GOCYCLO)"
 	@echo ""
 
 #------------------------------------------------------------------------------
@@ -88,7 +92,7 @@ build: ## Build binary to ./bin/xmind-mcp with version ldflags
 	@mkdir -p $(BIN)
 	go build -o $(BINARY) -ldflags "$(LDFLAGS)" ./cmd/xmind-mcp
 
-install: ## Run go install with same ldflags (installs to GOPATH/bin or GOBIN)
+install: ## Run go install with same ldflags as 'build' target
 	go install -ldflags "$(LDFLAGS)" ./cmd/xmind-mcp
 
 #------------------------------------------------------------------------------
@@ -99,7 +103,7 @@ run: ## Run via go run (optional: ARGS="--flags")
 	go run -ldflags "$(LDFLAGS)" ./cmd/xmind-mcp $(ARGS)
 
 OUT ?= docs/example.xmind
-gen-example: ## Generate example mind map to docs/example.xmind (override: OUT=path/to/file.xmind)
+gen-example: ## Write example mind map to docs/example.xmind (override: OUT=...)
 	go run ./cmd/gen-example $(OUT)
 
 #------------------------------------------------------------------------------
@@ -126,12 +130,16 @@ lint\:fix: ## Run golangci-lint with --fix
 	@test -x $(GOLANGCI) || (echo "Run 'make setup' to install golangci-lint" && exit 1)
 	$(GOLANGCI) run --fix ./...
 
-fmt: ## Format with goimports (gofmt + import fixes; -l lists changed files, -w writes)
+fmt: ## Format with goimports (gofmt + import fixes)
 	@test -x $(GOIMPORTS) || (echo "Run 'make setup' to install goimports into ./bin" && exit 1)
 	$(GOIMPORTS) -l -w .
 
 vet: ## Run go vet
 	go vet ./...
+
+cyclo: ## Run gocyclo; run 'make setup' first
+	@test -x $(GOCYCLO) || (echo "Run 'make setup' to install gocyclo" && exit 1)
+	$(GOCYCLO) -over 10 .
 
 #------------------------------------------------------------------------------
 # Module
@@ -153,14 +161,15 @@ clean: ## Remove built binary and coverage artifacts
 clean\:cache: ## Clear Go test cache
 	go clean -testcache
 
-clean\:all: clean ## Run clean plus remove ./bin (golangci-lint, goimports, etc.)
+clean\:all: clean ## Run clean plus remove ./bin (Go tools)
 	rm -rf $(BIN)
 
 #------------------------------------------------------------------------------
 # Utilities
 #------------------------------------------------------------------------------
 
-versions: ## Show Go, golangci-lint, and goimports versions
+versions: ## Show Go and required tool versions
 	@echo "Go: $$(go version)"
 	@if test -x $(GOLANGCI); then $(GOLANGCI) version; else echo "golangci-lint: not installed (run make setup)"; fi
 	@if test -x $(GOIMPORTS); then echo "goimports (module metadata):"; go version -m $(GOIMPORTS) 2>&1 | head -4; else echo "goimports: not installed (run make setup)"; fi
+	@if test -x $(GOCYCLO); then echo "gocyclo (module metadata):"; go version -m $(GOCYCLO) 2>&1 | head -4; else echo "gocyclo: not installed (run make setup)"; fi
