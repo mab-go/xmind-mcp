@@ -34,3 +34,19 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.11.3
+
+  cyclomatic-complexity:
+    name: cyclomatic-complexity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Generate gocyclo report (non-blocking)
+        run: make setup && ( make cyclo 2>&1 | tee cyclo.txt; exit 0 )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cyclomatic-complexity
+          path: cyclo.txt

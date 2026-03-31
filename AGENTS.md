@@ -17,7 +17,7 @@ Dockerfile                — multi-stage image (Alpine build, distroless runtim
 .dockerignore             — Docker build context exclusions
 .github/
   workflows/
-    ci.yml                — test and lint on push and PR
+    ci.yml                — test, lint, and cyclomatic-complexity report artifact on push and PR
     docker-publish.yml    — multi-platform image build and push to GHCR
 cmd/
   xmind-mcp/
@@ -245,6 +245,8 @@ For zip and JSON handling, use Go stdlib only: `archive/zip` and `encoding/json`
 ### Verification before you finish
 
 Treat a change as incomplete until **`make build test lint`** passes locally. The Makefile runs **golangci-lint** (including **revive**); do not rely on `go test` alone to catch style and API-surface rules.
+
+**Cyclomatic complexity (report-only):** After `make setup`, **`make cyclo`** runs [gocyclo](https://github.com/fzipp/gocyclo) with **`-over 10`** on the module tree (`gocyclo` takes a directory path, not a Go package pattern—see the Makefile). It lists functions with complexity **strictly greater than 10** (including `*_test.go`). This is a stricter bar than [Go Report Card](https://goreportcard.com/)’s public check (**cyclo-over=15**); the badge’s **percentage is file-based** (any over-threshold function fails the file), while the CLI lists **individual functions**, so do not expect the same headline number. CI uploads a **`cyclo.txt`** artifact from a **non-blocking** job; it does not fail the workflow when violations exist.
 
 Also verify that documentation reflects the change before finishing. Update **`AGENTS.md`**, **`.cursor/rules/`**, and **`.cursor/skills/`** as needed:
 
