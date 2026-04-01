@@ -832,111 +832,261 @@ func (h *XMindHandler) ReorderChildren(ctx context.Context, req mcp.CallToolRequ
 	return textResult(fmt.Sprintf("reordered %d children under %s", len(newOrder), parentID)), nil
 }
 
+func notesArgActionable(args map[string]any) bool {
+	_, has := args["notes"]
+	return has
+}
+
+func nonNilArgActionable(args map[string]any, key string) bool {
+	v, has := args[key]
+	return has && v != nil
+}
+
+func removeMarkersArgActionable(args map[string]any) bool {
+	v, has := args["remove_markers"]
+	if !has || v == nil {
+		return false
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return true
+	}
+	return len(arr) > 0
+}
+
 // hasActionableTopicPropertyArgs reports whether bulk set-topic-properties has at least one
 // property argument that would run a mutating branch (same rules as the single-topic tool).
+// Keep in sync with applyTopicPropertiesArgs: notes ⇒ key present; labels, markers, link ⇒ key present and value non-nil;
+// remove_markers ⇒ key present and non-nil, and (wrong type OR len(slice) > 0).
 func hasActionableTopicPropertyArgs(args map[string]any) bool {
-	if _, has := args["notes"]; has {
-		return true
+	return notesArgActionable(args) ||
+		nonNilArgActionable(args, "labels") ||
+		nonNilArgActionable(args, "markers") ||
+		nonNilArgActionable(args, "link") ||
+		removeMarkersArgActionable(args)
+}
+
+func applyNotesFromArgs(args map[string]any, topic *xmind.Topic) *mcp.CallToolResult {
+	v, has := args["notes"]
+	if !has {
+		return nil
 	}
-	if v, has := args["labels"]; has && v != nil {
-		return true
+	if v == nil {
+		topic.Notes = nil
+		return nil
 	}
-	if v, has := args["markers"]; has && v != nil {
-		return true
+	s, ok := v.(string)
+	if !ok {
+		return mcp.NewToolResultError("invalid argument notes: expected a string")
 	}
-	if v, has := args["link"]; has && v != nil {
-		return true
+	if s == "" {
+		topic.Notes = nil
+		return nil
 	}
-	if v, has := args["remove_markers"]; has && v != nil {
-		arr, ok := v.([]any)
-		if !ok {
-			return true // invalid type — apply will error
+	topic.Notes = &xmind.Notes{
+		Plain:    &xmind.NoteContent{Content: s},
+		RealHTML: &xmind.NoteContent{Content: plainToRealHTML(s)},
+	}
+	return nil
+}
+
+func applyLabelsFromArgs(args map[string]any, topic *xmind.Topic) *mcp.CallToolResult {
+	v, has := args["labels"]
+	if !has || v == nil {
+		return nil
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return mcp.NewToolResultError("invalid argument labels: expected an array")
+	}
+	labels, err := stringSliceFromAnyArray(arr, "labels")
+	if err != nil {
+		return err
+	}
+	topic.Labels = labels
+	return nil
+}
+
+func applyMarkersFromArgs(args map[string]any, topic *xmind.Topic) *mcp.CallToolResult {
+	v, has := args["markers"]
+	if !has || v == nil {
+		return nil
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return mcp.NewToolResultError("invalid argument markers: expected an array")
+	}
+	ss, err := stringSliceFromAnyArray(arr, "markers")
+	if err != nil {
+		return err
+	}
+	markers := make([]xmind.Marker, len(ss))
+	for i, s := range ss {
+		markers[i] = xmind.Marker{MarkerID: s}
+	}
+	topic.Markers = markers
+	return nil
+}
+
+func applyRemoveMarkersFromArgs(args map[string]any, topic *xmind.Topic) *mcp.CallToolResult {
+	v, has := args["remove_markers"]
+	if !has || v == nil {
+		return nil
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return mcp.NewToolResultError("invalid argument remove_markers: expected an array")
+	}
+	if len(arr) == 0 {
+		return nil
+	}
+	remove, err := stringSetFromAnyArray(arr, "remove_markers")
+	if err != nil {
+		return err
+	}
+	out := make([]xmind.Marker, 0, len(topic.Markers))
+	for _, m := range topic.Markers {
+		if _, drop := remove[m.MarkerID]; !drop {
+			out = append(out, m)
 		}
-		return len(arr) > 0
 	}
-	return false
+	topic.Markers = out
+	return nil
+}
+
+func applyLinkFromArgs(args map[string]any, topic *xmind.Topic) *mcp.CallToolResult {
+	v, has := args["link"]
+	if !has || v == nil {
+		return nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return mcp.NewToolResultError("invalid argument link: expected a string")
+	}
+	topic.Href = s
+	return nil
+}
+
+// stringSliceFromAnyArray parses arr into []string, using key as the argument name for errors ("labels[0]: …").
+func stringSliceFromAnyArray(arr []any, key string) ([]string, *mcp.CallToolResult) {
+	out := make([]string, 0, len(arr))
+	for i, el := range arr {
+		s, ok := el.(string)
+		if !ok {
+			return nil, mcp.NewToolResultError(fmt.Sprintf("%s[%d]: expected string", key, i))
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// stringSetFromAnyArray parses arr into a set of strings for remove_markers-style args.
+func stringSetFromAnyArray(arr []any, key string) (map[string]struct{}, *mcp.CallToolResult) {
+	remove := make(map[string]struct{}, len(arr))
+	for i, el := range arr {
+		s, ok := el.(string)
+		if !ok {
+			return nil, mcp.NewToolResultError(fmt.Sprintf("%s[%d]: expected string", key, i))
+		}
+		remove[s] = struct{}{}
+	}
+	return remove, nil
 }
 
 // applyTopicPropertiesArgs applies notes, labels, markers, remove_markers, and link from args
 // to topic using the same semantics as xmind_set_topic_properties.
 func applyTopicPropertiesArgs(args map[string]any, topic *xmind.Topic) *mcp.CallToolResult {
-	if v, has := args["notes"]; has {
-		if v == nil {
-			topic.Notes = nil
-		} else {
-			s, ok := v.(string)
-			if !ok {
-				return mcp.NewToolResultError("invalid argument notes: expected a string")
-			}
-			if s == "" {
-				topic.Notes = nil
-			} else {
-				topic.Notes = &xmind.Notes{
-					Plain:    &xmind.NoteContent{Content: s},
-					RealHTML: &xmind.NoteContent{Content: plainToRealHTML(s)},
-				}
-			}
-		}
+	if r := applyNotesFromArgs(args, topic); r != nil {
+		return r
 	}
-	if v, has := args["labels"]; has && v != nil {
-		arr, ok := v.([]any)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument labels: expected an array")
-		}
-		labels := make([]string, 0, len(arr))
-		for i, el := range arr {
-			s, ok := el.(string)
-			if !ok {
-				return mcp.NewToolResultError(fmt.Sprintf("labels[%d]: expected string", i))
-			}
-			labels = append(labels, s)
-		}
-		topic.Labels = labels
+	if r := applyLabelsFromArgs(args, topic); r != nil {
+		return r
 	}
-	if v, has := args["markers"]; has && v != nil {
-		arr, ok := v.([]any)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument markers: expected an array")
-		}
-		markers := make([]xmind.Marker, 0, len(arr))
-		for i, el := range arr {
-			s, ok := el.(string)
-			if !ok {
-				return mcp.NewToolResultError(fmt.Sprintf("markers[%d]: expected string", i))
-			}
-			markers = append(markers, xmind.Marker{MarkerID: s})
-		}
-		topic.Markers = markers
+	if r := applyMarkersFromArgs(args, topic); r != nil {
+		return r
 	}
-	if v, has := args["remove_markers"]; has && v != nil {
-		arr, ok := v.([]any)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument remove_markers: expected an array")
-		}
-		if len(arr) > 0 {
-			remove := make(map[string]struct{}, len(arr))
-			for i, el := range arr {
-				s, ok := el.(string)
-				if !ok {
-					return mcp.NewToolResultError(fmt.Sprintf("remove_markers[%d]: expected string", i))
-				}
-				remove[s] = struct{}{}
-			}
-			out := make([]xmind.Marker, 0, len(topic.Markers))
-			for _, m := range topic.Markers {
-				if _, drop := remove[m.MarkerID]; !drop {
-					out = append(out, m)
-				}
-			}
-			topic.Markers = out
-		}
+	if r := applyRemoveMarkersFromArgs(args, topic); r != nil {
+		return r
 	}
-	if v, has := args["link"]; has && v != nil {
+	if r := applyLinkFromArgs(args, topic); r != nil {
+		return r
+	}
+	return nil
+}
+
+// parseTopicIDsArgs validates args["topic_ids"] as a non-empty slice of unique non-empty strings.
+func parseTopicIDsArgs(args map[string]any) ([]string, *mcp.CallToolResult) {
+	raw, has := args["topic_ids"]
+	if !has {
+		return nil, mcp.NewToolResultError("missing required argument: topic_ids")
+	}
+	rawIDs, ok := raw.([]any)
+	if !ok {
+		return nil, mcp.NewToolResultError("invalid argument topic_ids: expected an array")
+	}
+	return collectUniqueTopicIDs(rawIDs)
+}
+
+func collectUniqueTopicIDs(rawIDs []any) ([]string, *mcp.CallToolResult) {
+	topicIDs := make([]string, 0, len(rawIDs))
+	seen := make(map[string]struct{}, len(rawIDs))
+	for i, v := range rawIDs {
 		s, ok := v.(string)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument link: expected a string")
+		if !ok || s == "" {
+			return nil, mcp.NewToolResultError(fmt.Sprintf("topic_ids[%d]: expected non-empty string", i))
 		}
-		topic.Href = s
+		if _, dup := seen[s]; dup {
+			return nil, mcp.NewToolResultError(fmt.Sprintf("duplicate id in topic_ids: %s", s))
+		}
+		seen[s] = struct{}{}
+		topicIDs = append(topicIDs, s)
+	}
+	if len(topicIDs) == 0 {
+		return nil, mcp.NewToolResultError("topic_ids must be non-empty")
+	}
+	return topicIDs, nil
+}
+
+// resolveTopicsForSheet returns pointers to topics for each id in order, or a tool error listing missing ids.
+func resolveTopicsForSheet(root *xmind.Topic, topicIDs []string) ([]*xmind.Topic, *mcp.CallToolResult) {
+	topics := make([]*xmind.Topic, 0, len(topicIDs))
+	missing := make([]string, 0)
+	for _, id := range topicIDs {
+		t := findTopicByID(root, id)
+		if t == nil {
+			missing = append(missing, id)
+		} else {
+			topics = append(topics, t)
+		}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		return nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", strings.Join(missing, ", ")))
+	}
+	return topics, nil
+}
+
+// loadSheetByID reads the map and returns the sheet with sheetID, or a tool/protocol error.
+func loadSheetByID(absPath, sheetID string) ([]xmind.Sheet, *xmind.Sheet, *mcp.CallToolResult, error) {
+	sheets, toolErr2, err := statAndReadMap(absPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if toolErr2 != nil {
+		return nil, nil, toolErr2, nil
+	}
+	sh := findSheetByID(sheets, sheetID)
+	if sh == nil {
+		return nil, nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	}
+	return sheets, sh, nil, nil
+}
+
+func applyTopicPropertiesToTopics(args map[string]any, topics []*xmind.Topic) *mcp.CallToolResult {
+	for _, topic := range topics {
+		if r := applyTopicPropertiesArgs(args, topic); r != nil {
+			return r
+		}
 	}
 	return nil
 }
@@ -998,66 +1148,30 @@ func (h *XMindHandler) SetTopicPropertiesBulk(ctx context.Context, req mcp.CallT
 		return terr, nil
 	}
 
-	raw, has := args["topic_ids"]
-	if !has {
-		return mcp.NewToolResultError("missing required argument: topic_ids"), nil
-	}
-	rawIDs, ok := raw.([]any)
-	if !ok {
-		return mcp.NewToolResultError("invalid argument topic_ids: expected an array"), nil
-	}
-	topicIDs := make([]string, 0, len(rawIDs))
-	seen := make(map[string]struct{}, len(rawIDs))
-	for i, v := range rawIDs {
-		s, ok := v.(string)
-		if !ok || s == "" {
-			return mcp.NewToolResultError(fmt.Sprintf("topic_ids[%d]: expected non-empty string", i)), nil
-		}
-		if _, dup := seen[s]; dup {
-			return mcp.NewToolResultError(fmt.Sprintf("duplicate id in topic_ids: %s", s)), nil
-		}
-		seen[s] = struct{}{}
-		topicIDs = append(topicIDs, s)
-	}
-	if len(topicIDs) == 0 {
-		return mcp.NewToolResultError("topic_ids must be non-empty"), nil
+	topicIDs, idErr := parseTopicIDsArgs(args)
+	if idErr != nil {
+		return idErr, nil
 	}
 
 	if !hasActionableTopicPropertyArgs(args) {
 		return mcp.NewToolResultError("missing property updates: provide at least one of notes, labels, markers, remove_markers, or link"), nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, sh, sheetErr, err := loadSheetByID(absPath, sheetID)
 	if err != nil {
 		return nil, err
 	}
-	if toolErr2 != nil {
-		return toolErr2, nil
-	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	if sheetErr != nil {
+		return sheetErr, nil
 	}
 
-	topics := make([]*xmind.Topic, 0, len(topicIDs))
-	missing := make([]string, 0)
-	for _, id := range topicIDs {
-		t := findTopicByID(&sh.RootTopic, id)
-		if t == nil {
-			missing = append(missing, id)
-		} else {
-			topics = append(topics, t)
-		}
-	}
-	if len(missing) > 0 {
-		slices.Sort(missing)
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", strings.Join(missing, ", "))), nil
+	topics, missErr := resolveTopicsForSheet(&sh.RootTopic, topicIDs)
+	if missErr != nil {
+		return missErr, nil
 	}
 
-	for _, topic := range topics {
-		if toolResult := applyTopicPropertiesArgs(args, topic); toolResult != nil {
-			return toolResult, nil
-		}
+	if toolResult := applyTopicPropertiesToTopics(args, topics); toolResult != nil {
+		return toolResult, nil
 	}
 
 	sh.RevisionID = uuid.New().String()
