@@ -205,6 +205,51 @@ func walkTopics(topic *xmind.Topic, depth int, parent *xmind.Topic, fn func(t *x
 	return true
 }
 
+// findDirectChildInLists reports whether targetID is an immediate child of parent and its index/list.
+func findDirectChildInLists(parent *xmind.Topic, targetID string) (idx int, listType string, ok bool) {
+	if parent == nil || parent.Children == nil {
+		return -1, "", false
+	}
+	for i := range parent.Children.Attached {
+		if parent.Children.Attached[i].ID == targetID {
+			return i, "attached", true
+		}
+	}
+	for i := range parent.Children.Detached {
+		if parent.Children.Detached[i].ID == targetID {
+			return i, "detached", true
+		}
+	}
+	for i := range parent.Children.Summary {
+		if parent.Children.Summary[i].ID == targetID {
+			return i, "summary", true
+		}
+	}
+	return -1, "", false
+}
+
+func searchChildrenForParent(root *xmind.Topic, targetID string) (*xmind.Topic, int, string) {
+	if root == nil || root.Children == nil {
+		return nil, -1, ""
+	}
+	for i := range root.Children.Attached {
+		if p, idx, lt := findParentOfTopic(&root.Children.Attached[i], targetID); p != nil {
+			return p, idx, lt
+		}
+	}
+	for i := range root.Children.Detached {
+		if p, idx, lt := findParentOfTopic(&root.Children.Detached[i], targetID); p != nil {
+			return p, idx, lt
+		}
+	}
+	for i := range root.Children.Summary {
+		if p, idx, lt := findParentOfTopic(&root.Children.Summary[i], targetID); p != nil {
+			return p, idx, lt
+		}
+	}
+	return nil, -1, ""
+}
+
 // findParentOfTopic returns the parent of targetID, the child's index within the parent's
 // attached/detached/summary slice, and which list ("attached", "detached", "summary").
 // Returns nil, -1, "" if target is the root, not found, or root is nil.
@@ -215,39 +260,10 @@ func findParentOfTopic(root *xmind.Topic, targetID string) (*xmind.Topic, int, s
 	if root.ID == targetID {
 		return nil, -1, ""
 	}
-	if root.Children != nil {
-		for i := range root.Children.Attached {
-			if root.Children.Attached[i].ID == targetID {
-				return root, i, "attached"
-			}
-		}
-		for i := range root.Children.Detached {
-			if root.Children.Detached[i].ID == targetID {
-				return root, i, "detached"
-			}
-		}
-		for i := range root.Children.Summary {
-			if root.Children.Summary[i].ID == targetID {
-				return root, i, "summary"
-			}
-		}
-		for i := range root.Children.Attached {
-			if p, idx, lt := findParentOfTopic(&root.Children.Attached[i], targetID); p != nil {
-				return p, idx, lt
-			}
-		}
-		for i := range root.Children.Detached {
-			if p, idx, lt := findParentOfTopic(&root.Children.Detached[i], targetID); p != nil {
-				return p, idx, lt
-			}
-		}
-		for i := range root.Children.Summary {
-			if p, idx, lt := findParentOfTopic(&root.Children.Summary[i], targetID); p != nil {
-				return p, idx, lt
-			}
-		}
+	if idx, lt, ok := findDirectChildInLists(root, targetID); ok {
+		return root, idx, lt
 	}
-	return nil, -1, ""
+	return searchChildrenForParent(root, targetID)
 }
 
 // isDescendantOf reports whether descendantID matches the ancestor topic or any node

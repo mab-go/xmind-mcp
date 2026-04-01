@@ -160,16 +160,13 @@ func formatSummaryRange(from, to int) string {
 	return fmt.Sprintf("(%d,%d)", from, to)
 }
 
-// adjustSummariesAfterAttachedRemove updates parent.Summaries and Children.Summary after
-// removing the attached child at removedIndex.
-func adjustSummariesAfterAttachedRemove(parent *xmind.Topic, removedIndex int) {
-	if parent == nil || parent.Children == nil {
-		return
-	}
+// shiftSummaryRangesAfterRemove returns updated summary descriptors and topic IDs whose summary
+// children should be removed after deleting the attached child at removedIndex.
+func shiftSummaryRangesAfterRemove(summaries []xmind.Summary, removedIndex int) ([]xmind.Summary, map[string]struct{}) {
 	N := removedIndex
 	removeTopicIDs := make(map[string]struct{})
 	var newSummaries []xmind.Summary
-	for _, s := range parent.Summaries {
+	for _, s := range summaries {
 		from, to, ok := parseSummaryRange(s.Range)
 		if !ok {
 			newSummaries = append(newSummaries, s)
@@ -189,6 +186,29 @@ func adjustSummariesAfterAttachedRemove(parent *xmind.Topic, removedIndex int) {
 		s.Range = formatSummaryRange(newFrom, newTo)
 		newSummaries = append(newSummaries, s)
 	}
+	return newSummaries, removeTopicIDs
+}
+
+func filterSummaryChildren(summaryChildren []xmind.Topic, removeIDs map[string]struct{}) []xmind.Topic {
+	if len(removeIDs) == 0 {
+		return summaryChildren
+	}
+	var kept []xmind.Topic
+	for i := range summaryChildren {
+		if _, drop := removeIDs[summaryChildren[i].ID]; !drop {
+			kept = append(kept, summaryChildren[i])
+		}
+	}
+	return kept
+}
+
+// adjustSummariesAfterAttachedRemove updates parent.Summaries and Children.Summary after
+// removing the attached child at removedIndex.
+func adjustSummariesAfterAttachedRemove(parent *xmind.Topic, removedIndex int) {
+	if parent == nil || parent.Children == nil {
+		return
+	}
+	newSummaries, removeTopicIDs := shiftSummaryRangesAfterRemove(parent.Summaries, removedIndex)
 	parent.Summaries = newSummaries
 	if len(parent.Summaries) == 0 {
 		parent.Summaries = nil
@@ -196,13 +216,7 @@ func adjustSummariesAfterAttachedRemove(parent *xmind.Topic, removedIndex int) {
 	if len(removeTopicIDs) == 0 {
 		return
 	}
-	var kept []xmind.Topic
-	for i := range parent.Children.Summary {
-		if _, drop := removeTopicIDs[parent.Children.Summary[i].ID]; !drop {
-			kept = append(kept, parent.Children.Summary[i])
-		}
-	}
-	parent.Children.Summary = kept
+	parent.Children.Summary = filterSummaryChildren(parent.Children.Summary, removeTopicIDs)
 	if len(parent.Children.Summary) == 0 {
 		parent.Children.Summary = nil
 	}
@@ -307,45 +321,57 @@ func insertAttached(parent *xmind.Topic, topic xmind.Topic, pos *int) *mcp.CallT
 	return nil
 }
 
+func removeAttachedChild(parent *xmind.Topic, idx int) (*xmind.Topic, *mcp.CallToolResult) {
+	if idx < 0 || idx >= len(parent.Children.Attached) {
+		return nil, mcp.NewToolResultError("internal error: attached child index out of range")
+	}
+	removed := parent.Children.Attached[idx]
+	parent.Children.Attached = slices.Delete(parent.Children.Attached, idx, idx+1)
+	if len(parent.Children.Attached) == 0 {
+		parent.Children.Attached = nil
+	}
+	adjustSummariesAfterAttachedRemove(parent, idx)
+	nilEmptyChildren(parent)
+	return &removed, nil
+}
+
+func removeDetachedChild(parent *xmind.Topic, idx int) (*xmind.Topic, *mcp.CallToolResult) {
+	if idx < 0 || idx >= len(parent.Children.Detached) {
+		return nil, mcp.NewToolResultError("internal error: detached child index out of range")
+	}
+	removed := parent.Children.Detached[idx]
+	parent.Children.Detached = slices.Delete(parent.Children.Detached, idx, idx+1)
+	if len(parent.Children.Detached) == 0 {
+		parent.Children.Detached = nil
+	}
+	nilEmptyChildren(parent)
+	return &removed, nil
+}
+
+func removeSummaryChild(parent *xmind.Topic, idx int) (*xmind.Topic, *mcp.CallToolResult) {
+	if idx < 0 || idx >= len(parent.Children.Summary) {
+		return nil, mcp.NewToolResultError("internal error: summary child index out of range")
+	}
+	removed := parent.Children.Summary[idx]
+	parent.Children.Summary = slices.Delete(parent.Children.Summary, idx, idx+1)
+	if len(parent.Children.Summary) == 0 {
+		parent.Children.Summary = nil
+	}
+	nilEmptyChildren(parent)
+	return &removed, nil
+}
+
 func removeChildAt(parent *xmind.Topic, idx int, listType string) (*xmind.Topic, *mcp.CallToolResult) {
 	if parent == nil || parent.Children == nil {
 		return nil, mcp.NewToolResultError("internal error: parent has no children")
 	}
 	switch listType {
 	case "attached":
-		if idx < 0 || idx >= len(parent.Children.Attached) {
-			return nil, mcp.NewToolResultError("internal error: attached child index out of range")
-		}
-		removed := parent.Children.Attached[idx]
-		parent.Children.Attached = slices.Delete(parent.Children.Attached, idx, idx+1)
-		if len(parent.Children.Attached) == 0 {
-			parent.Children.Attached = nil
-		}
-		adjustSummariesAfterAttachedRemove(parent, idx)
-		nilEmptyChildren(parent)
-		return &removed, nil
+		return removeAttachedChild(parent, idx)
 	case "detached":
-		if idx < 0 || idx >= len(parent.Children.Detached) {
-			return nil, mcp.NewToolResultError("internal error: detached child index out of range")
-		}
-		removed := parent.Children.Detached[idx]
-		parent.Children.Detached = slices.Delete(parent.Children.Detached, idx, idx+1)
-		if len(parent.Children.Detached) == 0 {
-			parent.Children.Detached = nil
-		}
-		nilEmptyChildren(parent)
-		return &removed, nil
+		return removeDetachedChild(parent, idx)
 	case "summary":
-		if idx < 0 || idx >= len(parent.Children.Summary) {
-			return nil, mcp.NewToolResultError("internal error: summary child index out of range")
-		}
-		removed := parent.Children.Summary[idx]
-		parent.Children.Summary = slices.Delete(parent.Children.Summary, idx, idx+1)
-		if len(parent.Children.Summary) == 0 {
-			parent.Children.Summary = nil
-		}
-		nilEmptyChildren(parent)
-		return &removed, nil
+		return removeSummaryChild(parent, idx)
 	default:
 		return nil, mcp.NewToolResultError("internal error: unknown child list type")
 	}
@@ -611,6 +637,18 @@ func (h *XMindHandler) RenameTopic(ctx context.Context, req mcp.CallToolRequest)
 	return textResult(fmt.Sprintf("renamed topic %s", topicID)), nil
 }
 
+func deleteNonRootTopic(sh *xmind.Sheet, topicID string) *mcp.CallToolResult {
+	if topicID == sh.RootTopic.ID {
+		return mcp.NewToolResultError("cannot delete the root topic of a sheet")
+	}
+	parent, idx, listType := findParentOfTopic(&sh.RootTopic, topicID)
+	if parent == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID))
+	}
+	_, rerr := removeChildAt(parent, idx, listType)
+	return rerr
+}
+
 // DeleteTopic removes a topic and its subtree (not the sheet root).
 func (h *XMindHandler) DeleteTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
@@ -639,16 +677,7 @@ func (h *XMindHandler) DeleteTopic(ctx context.Context, req mcp.CallToolRequest)
 	if sh == nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
 	}
-	if topicID == sh.RootTopic.ID {
-		return mcp.NewToolResultError("cannot delete the root topic of a sheet"), nil
-	}
-	parent, idx, listType := findParentOfTopic(&sh.RootTopic, topicID)
-	if parent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
-	}
-
-	_, rerr := removeChildAt(parent, idx, listType)
-	if rerr != nil {
+	if rerr := deleteNonRootTopic(sh, topicID); rerr != nil {
 		return rerr, nil
 	}
 	sh.RevisionID = uuid.New().String()
@@ -658,92 +687,101 @@ func (h *XMindHandler) DeleteTopic(ctx context.Context, req mcp.CallToolRequest)
 	return textResult(fmt.Sprintf("deleted topic %s", topicID)), nil
 }
 
-// MoveTopic reparents a topic under new_parent_id.
-func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	_ = ctx
-	args := req.GetArguments()
-	absPath, toolErr := absPathFromArgs(args)
+func validateMoveTopicPreconditions(sh *xmind.Sheet, topicID, newParentID string, topic, _ *xmind.Topic) *mcp.CallToolResult {
+	if topicID == sh.RootTopic.ID {
+		return mcp.NewToolResultError("cannot move the root topic")
+	}
+	if isDescendantOf(topic, newParentID) {
+		return mcp.NewToolResultError("cannot move a topic into its own subtree")
+	}
+	return nil
+}
+
+func detachTopicFromTree(root *xmind.Topic, topicID string) (*xmind.Topic, *mcp.CallToolResult) {
+	parent, idx, listType := findParentOfTopic(root, topicID)
+	if parent == nil {
+		return nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID))
+	}
+	return removeChildAt(parent, idx, listType)
+}
+
+// attachDetachedToParent re-resolves newParent after a remove (stale pointer if sibling in same Attached slice).
+func attachDetachedToParent(root *xmind.Topic, newParentID string, removed *xmind.Topic, pos *int) (insertIdx, siblingCount int, toolErr *mcp.CallToolResult) {
+	newParent := findTopicByID(root, newParentID)
+	if newParent == nil {
+		return 0, 0, mcp.NewToolResultError(fmt.Sprintf("new parent topic not found after remove: %s", newParentID))
+	}
+	if terr := insertAttached(newParent, *removed, pos); terr != nil {
+		return 0, 0, terr
+	}
+	if pos == nil {
+		insertIdx = len(newParent.Children.Attached) - 1
+	} else {
+		insertIdx = *pos
+	}
+	if len(newParent.Summaries) > 0 {
+		adjustSummariesAfterAttachedInsert(newParent, insertIdx)
+	}
+	return insertIdx, len(newParent.Children.Attached), nil
+}
+
+func moveTopicFromArgs(args map[string]any) (absPath, sheetID, topicID, newParentID string, pos *int, toolErr *mcp.CallToolResult) {
+	absPath, toolErr = absPathFromArgs(args)
 	if toolErr != nil {
-		return toolErr, nil
+		return "", "", "", "", nil, toolErr
 	}
-	sheetID, terr := requireString(args, "sheet_id")
-	if terr != nil {
-		return terr, nil
+	sheetID, toolErr = requireString(args, "sheet_id")
+	if toolErr != nil {
+		return absPath, "", "", "", nil, toolErr
 	}
-	topicID, terr := requireString(args, "topic_id")
-	if terr != nil {
-		return terr, nil
+	topicID, toolErr = requireString(args, "topic_id")
+	if toolErr != nil {
+		return absPath, sheetID, "", "", nil, toolErr
 	}
-	newParentID, terr := requireString(args, "new_parent_id")
-	if terr != nil {
-		return terr, nil
+	newParentID, toolErr = requireString(args, "new_parent_id")
+	if toolErr != nil {
+		return absPath, sheetID, topicID, "", nil, toolErr
 	}
 	pos, perr := parsePositionOptional(args["position"])
 	if perr != nil {
-		return perr, nil
+		return absPath, sheetID, topicID, newParentID, nil, perr
+	}
+	return absPath, sheetID, topicID, newParentID, pos, nil
+}
+
+// MoveTopic reparents a topic under new_parent_id.
+func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_ = ctx
+	absPath, sheetID, topicID, newParentID, pos, aerr := moveTopicFromArgs(req.GetArguments())
+	if aerr != nil {
+		return aerr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, sh, topic, newParent, ctxErr, err := loadSheetMoveSubjects(absPath, sheetID, topicID, newParentID)
 	if err != nil {
 		return nil, err
 	}
-	if toolErr2 != nil {
-		return toolErr2, nil
+	if ctxErr != nil {
+		return ctxErr, nil
 	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	topic := findTopicByID(&sh.RootTopic, topicID)
-	if topic == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
-	}
-	if topicID == sh.RootTopic.ID {
-		return mcp.NewToolResultError("cannot move the root topic"), nil
-	}
-	newParent := findTopicByID(&sh.RootTopic, newParentID)
-	if newParent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", newParentID)), nil
-	}
-	if isDescendantOf(topic, newParentID) {
-		return mcp.NewToolResultError("cannot move a topic into its own subtree"), nil
+	if terr := validateMoveTopicPreconditions(sh, topicID, newParentID, topic, newParent); terr != nil {
+		return terr, nil
 	}
 
-	parent, idx, listType := findParentOfTopic(&sh.RootTopic, topicID)
-	if parent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
-	}
-
-	removed, rerr := removeChildAt(parent, idx, listType)
+	removed, rerr := detachTopicFromTree(&sh.RootTopic, topicID)
 	if rerr != nil {
 		return rerr, nil
 	}
 
-	// Re-resolve newParent after the slice mutation: the pointer obtained before
-	// removeChildAt may be stale if newParent was a sibling of the removed topic
-	// in the same Attached slice (slices.Delete shifts elements in place).
-	newParent = findTopicByID(&sh.RootTopic, newParentID)
-	if newParent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("new parent topic not found after remove: %s", newParentID)), nil
+	moveInsertIdx, n, aerr := attachDetachedToParent(&sh.RootTopic, newParentID, removed, pos)
+	if aerr != nil {
+		return aerr, nil
 	}
 
-	if terr := insertAttached(newParent, *removed, pos); terr != nil {
-		return terr, nil
-	}
-	moveInsertIdx := 0
-	if pos == nil {
-		moveInsertIdx = len(newParent.Children.Attached) - 1
-	} else {
-		moveInsertIdx = *pos
-	}
-	if len(newParent.Summaries) > 0 {
-		adjustSummariesAfterAttachedInsert(newParent, moveInsertIdx)
-	}
 	sh.RevisionID = uuid.New().String()
 	if err := xmind.WriteMap(absPath, sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	n := len(newParent.Children.Attached)
 	return jsonResult(moveTopicResponse{
 		TopicID:      topicID,
 		ParentID:     newParentID,
@@ -752,57 +790,67 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 	})
 }
 
-// ReorderChildren reorders attached children of parent_id.
-func (h *XMindHandler) ReorderChildren(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	_ = ctx
-	args := req.GetArguments()
-	absPath, toolErr := absPathFromArgs(args)
-	if toolErr != nil {
-		return toolErr, nil
+func loadSheetParentTopic(absPath, sheetID, parentID string) ([]xmind.Sheet, *xmind.Sheet, *xmind.Topic, *mcp.CallToolResult, error) {
+	sheets, toolErr2, err := statAndReadMap(absPath)
+	if err != nil {
+		return nil, nil, nil, nil, err
 	}
-	sheetID, terr := requireString(args, "sheet_id")
-	if terr != nil {
-		return terr, nil
+	if toolErr2 != nil {
+		return nil, nil, nil, toolErr2, nil
 	}
-	parentID, terr := requireString(args, "parent_id")
-	if terr != nil {
-		return terr, nil
+	sh := findSheetByID(sheets, sheetID)
+	if sh == nil {
+		return sheets, nil, nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
 	}
-	rawIDs, ok := args["ordered_ids"].([]any)
-	if !ok || rawIDs == nil {
-		return mcp.NewToolResultError("missing or invalid argument: ordered_ids (expected array)"), nil
+	parent := findTopicByID(&sh.RootTopic, parentID)
+	if parent == nil {
+		return sheets, sh, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
 	}
+	return sheets, sh, parent, nil, nil
+}
+
+func loadSheetMoveSubjects(absPath, sheetID, topicID, newParentID string) ([]xmind.Sheet, *xmind.Sheet, *xmind.Topic, *xmind.Topic, *mcp.CallToolResult, error) {
+	sheets, toolErr2, err := statAndReadMap(absPath)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	if toolErr2 != nil {
+		return nil, nil, nil, nil, toolErr2, nil
+	}
+	sh := findSheetByID(sheets, sheetID)
+	if sh == nil {
+		return sheets, nil, nil, nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	}
+	topic := findTopicByID(&sh.RootTopic, topicID)
+	if topic == nil {
+		return sheets, sh, nil, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
+	}
+	newParent := findTopicByID(&sh.RootTopic, newParentID)
+	if newParent == nil {
+		return sheets, sh, topic, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", newParentID)), nil
+	}
+	return sheets, sh, topic, newParent, nil, nil
+}
+
+func parseOrderedIDs(rawIDs []any) ([]string, *mcp.CallToolResult) {
 	orderedIDs := make([]string, 0, len(rawIDs))
 	for i, v := range rawIDs {
 		s, ok := v.(string)
 		if !ok || s == "" {
-			return mcp.NewToolResultError(fmt.Sprintf("ordered_ids[%d]: expected non-empty string", i)), nil
+			return nil, mcp.NewToolResultError(fmt.Sprintf("ordered_ids[%d]: expected non-empty string", i))
 		}
 		orderedIDs = append(orderedIDs, s)
 	}
+	return orderedIDs, nil
+}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
-	if err != nil {
-		return nil, err
-	}
-	if toolErr2 != nil {
-		return toolErr2, nil
-	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	parent := findTopicByID(&sh.RootTopic, parentID)
-	if parent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
-	}
+func validateReorderAttached(parent *xmind.Topic, orderedIDs []string) ([]xmind.Topic, *mcp.CallToolResult) {
 	if parent.Children == nil || len(parent.Children.Attached) == 0 {
-		return mcp.NewToolResultError("parent has no attached children to reorder"), nil
+		return nil, mcp.NewToolResultError("parent has no attached children to reorder")
 	}
 	if len(orderedIDs) != len(parent.Children.Attached) {
-		return mcp.NewToolResultError(fmt.Sprintf("ordered_ids length %d does not match attached child count %d", len(orderedIDs), len(parent.Children.Attached))), nil
+		return nil, mcp.NewToolResultError(fmt.Sprintf("ordered_ids length %d does not match attached child count %d", len(orderedIDs), len(parent.Children.Attached)))
 	}
-
 	byID := make(map[string]xmind.Topic, len(parent.Children.Attached))
 	for _, t := range parent.Children.Attached {
 		byID[t.ID] = t
@@ -811,17 +859,63 @@ func (h *XMindHandler) ReorderChildren(ctx context.Context, req mcp.CallToolRequ
 	newOrder := make([]xmind.Topic, 0, len(orderedIDs))
 	for _, id := range orderedIDs {
 		if _, dup := seen[id]; dup {
-			return mcp.NewToolResultError(fmt.Sprintf("duplicate id in ordered_ids: %s", id)), nil
+			return nil, mcp.NewToolResultError(fmt.Sprintf("duplicate id in ordered_ids: %s", id))
 		}
 		seen[id] = struct{}{}
 		t, ok := byID[id]
 		if !ok {
-			return mcp.NewToolResultError(fmt.Sprintf("ordered_ids contains unknown id: %s", id)), nil
+			return nil, mcp.NewToolResultError(fmt.Sprintf("ordered_ids contains unknown id: %s", id))
 		}
 		newOrder = append(newOrder, t)
 	}
 	if len(seen) != len(byID) {
-		return mcp.NewToolResultError("ordered_ids must list every attached child exactly once"), nil
+		return nil, mcp.NewToolResultError("ordered_ids must list every attached child exactly once")
+	}
+	return newOrder, nil
+}
+
+func reorderChildrenFromArgs(args map[string]any) (absPath, sheetID, parentID string, orderedIDs []string, toolErr *mcp.CallToolResult) {
+	absPath, toolErr = absPathFromArgs(args)
+	if toolErr != nil {
+		return "", "", "", nil, toolErr
+	}
+	sheetID, toolErr = requireString(args, "sheet_id")
+	if toolErr != nil {
+		return absPath, "", "", nil, toolErr
+	}
+	parentID, toolErr = requireString(args, "parent_id")
+	if toolErr != nil {
+		return absPath, sheetID, "", nil, toolErr
+	}
+	rawIDs, ok := args["ordered_ids"].([]any)
+	if !ok || rawIDs == nil {
+		return absPath, sheetID, parentID, nil, mcp.NewToolResultError("missing or invalid argument: ordered_ids (expected array)")
+	}
+	orderedIDs, oerr := parseOrderedIDs(rawIDs)
+	if oerr != nil {
+		return absPath, sheetID, parentID, nil, oerr
+	}
+	return absPath, sheetID, parentID, orderedIDs, nil
+}
+
+// ReorderChildren reorders attached children of parent_id.
+func (h *XMindHandler) ReorderChildren(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_ = ctx
+	absPath, sheetID, parentID, orderedIDs, aerr := reorderChildrenFromArgs(req.GetArguments())
+	if aerr != nil {
+		return aerr, nil
+	}
+
+	sheets, sh, parent, ctxErr, err := loadSheetParentTopic(absPath, sheetID, parentID)
+	if err != nil {
+		return nil, err
+	}
+	if ctxErr != nil {
+		return ctxErr, nil
+	}
+	newOrder, verr := validateReorderAttached(parent, orderedIDs)
+	if verr != nil {
+		return verr, nil
 	}
 
 	parent.Children.Attached = newOrder
