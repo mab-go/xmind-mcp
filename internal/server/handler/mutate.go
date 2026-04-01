@@ -690,7 +690,7 @@ func (h *XMindHandler) DeleteTopic(ctx context.Context, req mcp.CallToolRequest)
 	return textResult(fmt.Sprintf("deleted topic %s", topicID)), nil
 }
 
-func validateMoveTopicPreconditions(sh *xmind.Sheet, topicID, newParentID string, topic, _ *xmind.Topic) *mcp.CallToolResult {
+func validateMoveTopicPreconditions(sh *xmind.Sheet, topicID, newParentID string, topic *xmind.Topic) *mcp.CallToolResult {
 	if topicID == sh.RootTopic.ID {
 		return mcp.NewToolResultError("cannot move the root topic")
 	}
@@ -760,14 +760,14 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 		return aerr, nil
 	}
 
-	sheets, sh, topic, newParent, ctxErr, err := loadSheetMoveSubjects(absPath, sheetID, topicID, newParentID)
+	sheets, sh, topic, _, ctxErr, err := loadSheetMoveSubjects(absPath, sheetID, topicID, newParentID)
 	if err != nil {
 		return nil, err
 	}
 	if ctxErr != nil {
 		return ctxErr, nil
 	}
-	if terr := validateMoveTopicPreconditions(sh, topicID, newParentID, topic, newParent); terr != nil {
+	if terr := validateMoveTopicPreconditions(sh, topicID, newParentID, topic); terr != nil {
 		return terr, nil
 	}
 
