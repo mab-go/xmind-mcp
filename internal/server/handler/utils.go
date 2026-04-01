@@ -452,124 +452,163 @@ func outlineNodeToTopics(n *outlineNode) xmind.Topic {
 	return t
 }
 
+type findReplaceChange struct {
+	SheetID  string `json:"sheetId,omitempty"`
+	ID       string `json:"id"`
+	OldTitle string `json:"oldTitle"`
+	NewTitle string `json:"newTitle"`
+}
+
+func exactMatchFromArgs(args map[string]any) (exact bool, toolErr *mcp.CallToolResult) {
+	if raw, has := args["exact_match"]; has && raw != nil {
+		v, ok := raw.(bool)
+		if !ok {
+			return false, mcp.NewToolResultError("invalid argument exact_match: expected a boolean")
+		}
+		return v, nil
+	}
+	return false, nil
+}
+
+func sheetsToUpdateForFindReplace(args map[string]any, sheets []xmind.Sheet) ([]*xmind.Sheet, *mcp.CallToolResult) {
+	if raw, has := args["sheet_id"]; has && raw != nil {
+		sheetID, ok := raw.(string)
+		if !ok || sheetID == "" {
+			return nil, mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string")
+		}
+		sh := findSheetByID(sheets, sheetID)
+		if sh == nil {
+			return nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID))
+		}
+		return []*xmind.Sheet{sh}, nil
+	}
+	out := make([]*xmind.Sheet, 0, len(sheets))
+	for i := range sheets {
+		out = append(out, &sheets[i])
+	}
+	return out, nil
+}
+
+func findReplaceRegexp(find string) *regexp.Regexp {
+	return regexp.MustCompile("(?i)" + regexp.QuoteMeta(find))
+}
+
+func applyFindReplaceToTitle(oldTitle, find, replace string, exact bool, re *regexp.Regexp) (newTitle string, changed bool) {
+	if exact {
+		if !strings.EqualFold(oldTitle, find) {
+			return oldTitle, false
+		}
+		if replace == oldTitle {
+			return oldTitle, false
+		}
+		return replace, true
+	}
+	newTitle = re.ReplaceAllStringFunc(oldTitle, func(string) string { return replace })
+	if newTitle == oldTitle {
+		return oldTitle, false
+	}
+	return newTitle, true
+}
+
+func applyFindReplaceOnSheet(sh *xmind.Sheet, find, replace string, exact bool, re *regexp.Regexp, includeSheetID bool) []findReplaceChange {
+	var out []findReplaceChange
+	walkTopics(&sh.RootTopic, 0, nil, func(t *xmind.Topic, _ int, _ *xmind.Topic) bool {
+		old := t.Title
+		newTitle, changed := applyFindReplaceToTitle(old, find, replace, exact, re)
+		if !changed {
+			return true
+		}
+		c := findReplaceChange{ID: t.ID, OldTitle: old, NewTitle: newTitle}
+		if includeSheetID {
+			c.SheetID = sh.ID
+		}
+		out = append(out, c)
+		t.Title = newTitle
+		t.TitleUnedited = false
+		return true
+	})
+	if len(out) > 0 {
+		sh.RevisionID = uuid.New().String()
+	}
+	return out
+}
+
+func parseFindAndReplaceInputs(args map[string]any) (absPath, findStr, replaceStr string, exact bool, toolErr *mcp.CallToolResult) {
+	absPath, toolErr = absPathFromArgs(args)
+	if toolErr != nil {
+		return "", "", "", false, toolErr
+	}
+	findStr, toolErr = requireString(args, "find")
+	if toolErr != nil {
+		return "", "", "", false, toolErr
+	}
+	replaceStr, toolErr = stringArgAllowEmpty(args, "replace")
+	if toolErr != nil {
+		return "", "", "", false, toolErr
+	}
+	exact, toolErr = exactMatchFromArgs(args)
+	return absPath, findStr, replaceStr, exact, toolErr
+}
+
+func findAndReplaceLoadSheets(absPath string, args map[string]any) (sheets []xmind.Sheet, sheetsToUpdate []*xmind.Sheet, toolErr *mcp.CallToolResult, err error) {
+	sheets, toolErr, err = statAndReadMap(absPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if toolErr != nil {
+		return nil, nil, toolErr, nil
+	}
+	sheetsToUpdate, toolErr = sheetsToUpdateForFindReplace(args, sheets)
+	return sheets, sheetsToUpdate, toolErr, nil
+}
+
+func findReplaceRunOnSheets(sheetsToUpdate []*xmind.Sheet, findStr, replaceStr string, exact bool) []findReplaceChange {
+	var re *regexp.Regexp
+	if !exact {
+		re = findReplaceRegexp(findStr)
+	}
+	includeSheetID := len(sheetsToUpdate) > 1
+	var changes []findReplaceChange
+	for _, sh := range sheetsToUpdate {
+		changes = append(changes, applyFindReplaceOnSheet(sh, findStr, replaceStr, exact, re, includeSheetID)...)
+	}
+	return changes
+}
+
+func finishFindReplace(absPath string, sheets []xmind.Sheet, changes []findReplaceChange) (*mcp.CallToolResult, error) {
+	resp := struct {
+		ChangedCount int                 `json:"changedCount"`
+		Changes      []findReplaceChange `json:"changes"`
+	}{ChangedCount: len(changes), Changes: changes}
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("marshal find_and_replace response: %w", err)
+	}
+	if len(changes) > 0 {
+		if err := xmind.WriteMap(absPath, sheets); err != nil {
+			return nil, fmt.Errorf("write map: %w", err)
+		}
+	}
+	return textResult(string(out)), nil
+}
+
 // FindAndReplace updates topic titles. If sheet_id is omitted, all sheets are updated.
 func (h *XMindHandler) FindAndReplace(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
 	args := req.GetArguments()
-	absPath, toolErr := absPathFromArgs(args)
+	absPath, findStr, replaceStr, exact, toolErr := parseFindAndReplaceInputs(args)
 	if toolErr != nil {
 		return toolErr, nil
 	}
-	findStr, terr := requireString(args, "find")
-	if terr != nil {
-		return terr, nil
-	}
-	replaceStr, rerr := stringArgAllowEmpty(args, "replace")
-	if rerr != nil {
-		return rerr, nil
-	}
-	var exact bool
-	if raw, has := args["exact_match"]; has && raw != nil {
-		v, ok := raw.(bool)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument exact_match: expected a boolean"), nil
-		}
-		exact = v
-	}
-
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, sheetsToUpdate, toolErr2, err := findAndReplaceLoadSheets(absPath, args)
 	if err != nil {
 		return nil, err
 	}
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
-
-	// Determine which sheets to update.
-	var sheetsToUpdate []*xmind.Sheet
-	if raw, has := args["sheet_id"]; has && raw != nil {
-		sheetID, ok := raw.(string)
-		if !ok || sheetID == "" {
-			return mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string"), nil
-		}
-		sh := findSheetByID(sheets, sheetID)
-		if sh == nil {
-			return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-		}
-		sheetsToUpdate = []*xmind.Sheet{sh}
-	} else {
-		for i := range sheets {
-			sheetsToUpdate = append(sheetsToUpdate, &sheets[i])
-		}
-	}
-
-	type change struct {
-		SheetID  string `json:"sheetId,omitempty"`
-		ID       string `json:"id"`
-		OldTitle string `json:"oldTitle"`
-		NewTitle string `json:"newTitle"`
-	}
-	var changes []change
-
-	var re *regexp.Regexp
-	if !exact {
-		re = regexp.MustCompile("(?i)" + regexp.QuoteMeta(findStr))
-	}
-
-	multiSheet := len(sheetsToUpdate) > 1
-	for _, sh := range sheetsToUpdate {
-		prevLen := len(changes)
-		walkTopics(&sh.RootTopic, 0, nil, func(t *xmind.Topic, _ int, _ *xmind.Topic) bool {
-			old := t.Title
-			var newTitle string
-			if exact {
-				if strings.EqualFold(old, findStr) {
-					newTitle = replaceStr
-					if newTitle == old {
-						return true
-					}
-				} else {
-					return true
-				}
-			} else {
-				newTitle = re.ReplaceAllStringFunc(old, func(string) string { return replaceStr })
-				if newTitle == old {
-					return true
-				}
-			}
-			c := change{ID: t.ID, OldTitle: old, NewTitle: newTitle}
-			if multiSheet {
-				c.SheetID = sh.ID
-			}
-			changes = append(changes, c)
-			t.Title = newTitle
-			t.TitleUnedited = false
-			return true
-		})
-		if len(changes) > prevLen {
-			sh.RevisionID = uuid.New().String()
-		}
-	}
-
-	resp := struct {
-		ChangedCount int      `json:"changedCount"`
-		Changes      []change `json:"changes"`
-	}{
-		ChangedCount: len(changes),
-		Changes:      changes,
-	}
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("marshal find_and_replace response: %w", err)
-	}
-
-	if len(changes) > 0 {
-		if err := xmind.WriteMap(absPath, sheets); err != nil {
-			return nil, fmt.Errorf("write map: %w", err)
-		}
-	}
-
-	return textResult(string(out)), nil
+	changes := findReplaceRunOnSheets(sheetsToUpdate, findStr, replaceStr, exact)
+	return finishFindReplace(absPath, sheets, changes)
 }
 
 func stringArgAllowEmpty(args map[string]any, key string) (string, *mcp.CallToolResult) {
