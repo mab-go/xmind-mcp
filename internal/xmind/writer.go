@@ -24,24 +24,124 @@ const metadataJSON = `{"dataStructureVersion":"2","creator":{"name":"xmind-mcp",
 
 const manifestJSON = `{"file-entries":{"content.json":{},"metadata.json":{},"content.xml":{}}}`
 
+// openZipReaderAtPath opens path as a zip and returns a reader; the caller must close the file.
+func openZipReaderAtPath(path string) (*zip.Reader, *os.File, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open xmind file: %w", err)
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("stat xmind file: %w", err)
+	}
+	zr, err := zip.NewReader(f, st.Size())
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("read zip: %w", err)
+	}
+	return zr, f, nil
+}
+
+// copyZipEntryRaw copies one entry from an existing zip into zw using raw compressed bytes.
+// The caller must skip entries (e.g. content.json) that should not be copied verbatim.
+func copyZipEntryRaw(zw *zip.Writer, src *zip.File) error {
+	fh := src.FileHeader
+	if len(fh.Extra) > 0 {
+		fh.Extra = append([]byte(nil), fh.Extra...)
+	}
+	dst, err := zw.CreateRaw(&fh)
+	if err != nil {
+		return fmt.Errorf("zip create raw %q: %w", src.Name, err)
+	}
+	raw, err := src.OpenRaw()
+	if err != nil {
+		return fmt.Errorf("zip open raw %q: %w", src.Name, err)
+	}
+	if _, err := io.Copy(dst, raw); err != nil {
+		if closer, ok := raw.(io.Closer); ok {
+			_ = closer.Close()
+		}
+		return fmt.Errorf("copy zip entry %q: %w", src.Name, err)
+	}
+	if closer, ok := raw.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	return nil
+}
+
+func copyZipEntriesExceptContentJSON(zw *zip.Writer, zr *zip.Reader) error {
+	for _, src := range zr.File {
+		if src.Name == "content.json" {
+			continue
+		}
+		if err := copyZipEntryRaw(zw, src); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeZipBytes(zw *zip.Writer, name string, body []byte) error {
+	w, err := zw.Create(name)
+	if err != nil {
+		return fmt.Errorf("zip create %q: %w", name, err)
+	}
+	if _, err := w.Write(body); err != nil {
+		return fmt.Errorf("zip write %q: %w", name, err)
+	}
+	return nil
+}
+
+func writeNewMapStandardEntries(zw *zip.Writer, contentJSON []byte) error {
+	entries := []struct {
+		name string
+		body []byte
+	}{
+		{"content.json", contentJSON},
+		{"metadata.json", []byte(metadataJSON)},
+		{"content.xml", stubContentXML},
+		{"manifest.json", []byte(manifestJSON)},
+	}
+	for _, e := range entries {
+		if err := writeZipBytes(zw, e.name, e.body); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func abortZipWriterAndFile(zw *zip.Writer, tmp *os.File) {
+	_ = zw.Close()
+	_ = tmp.Close()
+}
+
+func finishZipTempFile(zw *zip.Writer, tmp *os.File, tmpPath, dst string) error {
+	if err := zw.Close(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("close zip writer: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := replaceTempFile(tmpPath, dst); err != nil {
+		return err
+	}
+	return nil
+}
+
 // WriteMap replaces content.json in an existing .xmind zip, preserving all other entries
 // via raw compressed-byte copy (OpenRaw / CreateRaw).
 func WriteMap(path string, sheets []Sheet) error {
-	oldFile, err := os.Open(path)
+	oldZR, oldFile, err := openZipReaderAtPath(path)
 	if err != nil {
-		return fmt.Errorf("open xmind file: %w", err)
+		return err
 	}
 	defer func() { _ = oldFile.Close() }()
-
-	st, err := oldFile.Stat()
-	if err != nil {
-		return fmt.Errorf("stat xmind file: %w", err)
-	}
-
-	oldZR, err := zip.NewReader(oldFile, st.Size())
-	if err != nil {
-		return fmt.Errorf("read zip: %w", err)
-	}
 
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
@@ -63,64 +163,17 @@ func WriteMap(path string, sheets []Sheet) error {
 
 	zw := zip.NewWriter(tmp)
 
-	for _, src := range oldZR.File {
-		if src.Name == "content.json" {
-			continue
-		}
-		fh := src.FileHeader
-		if len(fh.Extra) > 0 {
-			fh.Extra = append([]byte(nil), fh.Extra...)
-		}
-		dst, err := zw.CreateRaw(&fh)
-		if err != nil {
-			_ = zw.Close()
-			_ = tmp.Close()
-			return fmt.Errorf("zip create raw %q: %w", src.Name, err)
-		}
-		raw, err := src.OpenRaw()
-		if err != nil {
-			_ = zw.Close()
-			_ = tmp.Close()
-			return fmt.Errorf("zip open raw %q: %w", src.Name, err)
-		}
-		if _, err := io.Copy(dst, raw); err != nil {
-			if closer, ok := raw.(io.Closer); ok {
-				_ = closer.Close()
-			}
-			_ = zw.Close()
-			_ = tmp.Close()
-			return fmt.Errorf("copy zip entry %q: %w", src.Name, err)
-		}
-		if closer, ok := raw.(io.Closer); ok {
-			_ = closer.Close()
-		}
+	if err := copyZipEntriesExceptContentJSON(zw, oldZR); err != nil {
+		abortZipWriterAndFile(zw, tmp)
+		return err
 	}
 
-	cw, err := zw.Create("content.json")
-	if err != nil {
-		_ = zw.Close()
-		_ = tmp.Close()
-		return fmt.Errorf("zip create content.json: %w", err)
-	}
-	if _, err := cw.Write(data); err != nil {
-		_ = zw.Close()
-		_ = tmp.Close()
-		return fmt.Errorf("write content.json: %w", err)
+	if err := writeZipBytes(zw, "content.json", data); err != nil {
+		abortZipWriterAndFile(zw, tmp)
+		return err
 	}
 
-	if err := zw.Close(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("close zip writer: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp file: %w", err)
-	}
-
-	if err := replaceTempFile(tmpPath, path); err != nil {
+	if err := finishZipTempFile(zw, tmp, tmpPath, path); err != nil {
 		return err
 	}
 	committed = true
@@ -150,51 +203,12 @@ func CreateNewMap(path string, sheets []Sheet) error {
 
 	zw := zip.NewWriter(tmp)
 
-	writeEntry := func(name string, body []byte) error {
-		w, err := zw.Create(name)
-		if err != nil {
-			return fmt.Errorf("zip create %q: %w", name, err)
-		}
-		if _, err := w.Write(body); err != nil {
-			return fmt.Errorf("zip write %q: %w", name, err)
-		}
-		return nil
-	}
-
-	if err := writeEntry("content.json", data); err != nil {
-		_ = zw.Close()
-		_ = tmp.Close()
-		return err
-	}
-	if err := writeEntry("metadata.json", []byte(metadataJSON)); err != nil {
-		_ = zw.Close()
-		_ = tmp.Close()
-		return err
-	}
-	if err := writeEntry("content.xml", stubContentXML); err != nil {
-		_ = zw.Close()
-		_ = tmp.Close()
-		return err
-	}
-	if err := writeEntry("manifest.json", []byte(manifestJSON)); err != nil {
-		_ = zw.Close()
-		_ = tmp.Close()
+	if err := writeNewMapStandardEntries(zw, data); err != nil {
+		abortZipWriterAndFile(zw, tmp)
 		return err
 	}
 
-	if err := zw.Close(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("close zip writer: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp file: %w", err)
-	}
-
-	if err := replaceTempFile(tmpPath, path); err != nil {
+	if err := finishZipTempFile(zw, tmp, tmpPath, path); err != nil {
 		return err
 	}
 	committed = true
