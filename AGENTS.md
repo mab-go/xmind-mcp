@@ -198,6 +198,8 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 | `findTopicByID(root, id)` | First topic matching `id` in DFS order |
 | `ancestryPath(root, targetID)` | Titles from root to (not including) the target; `nil` if target is root or not found |
 | `findParentOfTopic(root, targetID)` | Parent topic, child index, and list name (`"attached"`, `"detached"`, `"summary"`) |
+| `findDirectChildInLists(parent, targetID)` | If `targetID` is an immediate child of `parent`, returns its index and list name; else `ok` false |
+| `searchChildrenForParent(root, targetID)` | Depth-first: recurse into attached, detached, summary to find which child subtree contains `targetID`’s parent |
 | `isDescendantOf(ancestor, descendantID)` | Reports whether a node is the ancestor or any node in its subtree |
 | `countTopics(t)` | Total node count for a subtree (self + all descendants) |
 | `deepCloneTopic(root)` | JSON round-trip clone of a subtree, then fresh UUIDs for topics and summary/boundary descriptors |
