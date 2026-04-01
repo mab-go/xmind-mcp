@@ -135,6 +135,72 @@ func parseBoolOptional(args map[string]any, key string) (bool, *mcp.CallToolResu
 	return false, nil
 }
 
+// requireSheetIDFromArgs reads and validates args["sheet_id"] like GetSubtree/FindTopic.
+func requireSheetIDFromArgs(args map[string]any) (sheetID string, toolErr *mcp.CallToolResult) {
+	rawSheet, ok := args["sheet_id"]
+	if !ok {
+		return "", mcp.NewToolResultError("missing required argument: sheet_id")
+	}
+	sid, ok := rawSheet.(string)
+	if !ok || sid == "" {
+		return "", mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string")
+	}
+	return sid, nil
+}
+
+// getSubtreeRootFromArgs resolves the subtree root from optional topic_id (empty string = sheet root).
+func getSubtreeRootFromArgs(sh *xmind.Sheet, args map[string]any) (root *xmind.Topic, toolErr *mcp.CallToolResult) {
+	if v, has := args["topic_id"]; has && v != nil {
+		rawTopic, ok := v.(string)
+		if !ok {
+			return nil, mcp.NewToolResultError("invalid argument topic_id: expected a string")
+		}
+		if rawTopic != "" {
+			t := findTopicByID(&sh.RootTopic, rawTopic)
+			if t == nil {
+				return nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", rawTopic))
+			}
+			return t, nil
+		}
+	}
+	return &sh.RootTopic, nil
+}
+
+// readMapAndSheet loads the workbook and returns the sheet with sheetID.
+func readMapAndSheet(absPath, sheetID string) (*xmind.Sheet, *mcp.CallToolResult, error) {
+	sheets, toolErr2, err := statAndReadMap(absPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if toolErr2 != nil {
+		return nil, toolErr2, nil
+	}
+	sh := findSheetByID(sheets, sheetID)
+	if sh == nil {
+		return nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	}
+	return sh, nil, nil
+}
+
+func getSubtreeDepthAndOpts(args map[string]any) (maxDepth *int, opts subtreeOpts, toolErr *mcp.CallToolResult) {
+	if raw, has := args["depth"]; has {
+		md, derr := parseDepthOptional(raw)
+		if derr != nil {
+			return nil, subtreeOpts{}, derr
+		}
+		maxDepth = md
+	}
+	includeNotes, berr := parseBoolOptional(args, "include_notes")
+	if berr != nil {
+		return nil, subtreeOpts{}, berr
+	}
+	includeLinks, berr2 := parseBoolOptional(args, "include_links")
+	if berr2 != nil {
+		return nil, subtreeOpts{}, berr2
+	}
+	return maxDepth, subtreeOpts{includeNotes: includeNotes, includeLinks: includeLinks}, nil
+}
+
 // GetSubtree returns a JSON subtree from the sheet root or a topic id.
 func (h *XMindHandler) GetSubtree(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
@@ -144,64 +210,28 @@ func (h *XMindHandler) GetSubtree(ctx context.Context, req mcp.CallToolRequest) 
 		return toolErr, nil
 	}
 
-	rawSheet, ok := args["sheet_id"]
-	if !ok {
-		return mcp.NewToolResultError("missing required argument: sheet_id"), nil
-	}
-	sheetID, ok := rawSheet.(string)
-	if !ok || sheetID == "" {
-		return mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string"), nil
+	sheetID, serr := requireSheetIDFromArgs(args)
+	if serr != nil {
+		return serr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sh, teRead, err := readMapAndSheet(absPath, sheetID)
 	if err != nil {
 		return nil, err
 	}
-	if toolErr2 != nil {
-		return toolErr2, nil
+	if teRead != nil {
+		return teRead, nil
 	}
 
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	root, rerr := getSubtreeRootFromArgs(sh, args)
+	if rerr != nil {
+		return rerr, nil
 	}
 
-	var root *xmind.Topic
-	if v, has := args["topic_id"]; has && v != nil {
-		rawTopic, ok := v.(string)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument topic_id: expected a string"), nil
-		}
-		if rawTopic != "" {
-			t := findTopicByID(&sh.RootTopic, rawTopic)
-			if t == nil {
-				return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", rawTopic)), nil
-			}
-			root = t
-		}
+	maxDepth, opts, derr := getSubtreeDepthAndOpts(args)
+	if derr != nil {
+		return derr, nil
 	}
-	if root == nil {
-		root = &sh.RootTopic
-	}
-
-	var maxDepth *int
-	if raw, has := args["depth"]; has {
-		md, derr := parseDepthOptional(raw)
-		if derr != nil {
-			return derr, nil
-		}
-		maxDepth = md
-	}
-
-	includeNotes, berr := parseBoolOptional(args, "include_notes")
-	if berr != nil {
-		return berr, nil
-	}
-	includeLinks, berr2 := parseBoolOptional(args, "include_links")
-	if berr2 != nil {
-		return berr2, nil
-	}
-	opts := subtreeOpts{includeNotes: includeNotes, includeLinks: includeLinks}
 
 	node := topicToSubtree(root, 0, maxDepth, opts)
 	out, err := json.Marshal(node)
@@ -225,6 +255,48 @@ type searchTopicItem struct {
 	AncestryPath []string `json:"ancestryPath"`
 	ParentTitle  string   `json:"parentTitle"`
 	Depth        int      `json:"depth"`
+}
+
+// searchSheetsScopeFromArgs returns sheets to search and whether to attach sheet metadata per match.
+func searchSheetsScopeFromArgs(sheets []xmind.Sheet, args map[string]any) (toSearch []xmind.Sheet, includeSheetMetadata bool, toolErr *mcp.CallToolResult) {
+	if raw, has := args["sheet_id"]; has && raw != nil {
+		sheetID, ok := raw.(string)
+		if !ok || sheetID == "" {
+			return nil, false, mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string")
+		}
+		sh := findSheetByID(sheets, sheetID)
+		if sh == nil {
+			return nil, false, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID))
+		}
+		return []xmind.Sheet{*sh}, false, nil
+	}
+	return sheets, true, nil
+}
+
+func collectSearchTopicMatches(sh *xmind.Sheet, qLower string, includeSheetMetadata bool) []searchTopicItem {
+	var matches []searchTopicItem
+	walkTopics(&sh.RootTopic, 0, nil, func(t *xmind.Topic, depth int, parent *xmind.Topic) bool {
+		if strings.Contains(strings.ToLower(t.Title), qLower) {
+			pt := ""
+			if parent != nil {
+				pt = parent.Title
+			}
+			item := searchTopicItem{
+				ID:           t.ID,
+				Title:        t.Title,
+				AncestryPath: ancestryPath(&sh.RootTopic, t.ID),
+				ParentTitle:  pt,
+				Depth:        depth,
+			}
+			if includeSheetMetadata {
+				item.SheetID = sh.ID
+				item.SheetTitle = sh.Title
+			}
+			matches = append(matches, item)
+		}
+		return true
+	})
+	return matches
 }
 
 // SearchTopics finds topics whose title contains the query (case-insensitive).
@@ -257,49 +329,16 @@ func (h *XMindHandler) SearchTopics(ctx context.Context, req mcp.CallToolRequest
 		return toolErr2, nil
 	}
 
-	// Determine which sheets to search.
-	allSheets := false
-	var sheetsToSearch []xmind.Sheet
-	if raw, has := args["sheet_id"]; has && raw != nil {
-		sheetID, ok := raw.(string)
-		if !ok || sheetID == "" {
-			return mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string"), nil
-		}
-		sh := findSheetByID(sheets, sheetID)
-		if sh == nil {
-			return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-		}
-		sheetsToSearch = []xmind.Sheet{*sh}
-	} else {
-		sheetsToSearch = sheets
-		allSheets = true
+	sheetsToSearch, allSheets, scopeErr := searchSheetsScopeFromArgs(sheets, args)
+	if scopeErr != nil {
+		return scopeErr, nil
 	}
 
 	qLower := strings.ToLower(query)
 	var matches []searchTopicItem
 	for i := range sheetsToSearch {
 		sh := &sheetsToSearch[i]
-		walkTopics(&sh.RootTopic, 0, nil, func(t *xmind.Topic, depth int, parent *xmind.Topic) bool {
-			if strings.Contains(strings.ToLower(t.Title), qLower) {
-				pt := ""
-				if parent != nil {
-					pt = parent.Title
-				}
-				item := searchTopicItem{
-					ID:           t.ID,
-					Title:        t.Title,
-					AncestryPath: ancestryPath(&sh.RootTopic, t.ID),
-					ParentTitle:  pt,
-					Depth:        depth,
-				}
-				if allSheets {
-					item.SheetID = sh.ID
-					item.SheetTitle = sh.Title
-				}
-				matches = append(matches, item)
-			}
-			return true
-		})
+		matches = append(matches, collectSearchTopicMatches(sh, qLower, allSheets)...)
 	}
 
 	resp := searchTopicsResponse{
@@ -369,68 +408,41 @@ func childTitlesInWalkOrder(t *xmind.Topic) []string {
 	return out
 }
 
-// FindTopic returns the first topic with an exact case-sensitive title (preorder DFS).
-// If parent_id is set, the walk starts at that topic (which may itself match).
-func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	_ = ctx
-	args := req.GetArguments()
-	absPath, toolErr := absPathFromArgs(args)
-	if toolErr != nil {
-		return toolErr, nil
-	}
-
-	rawSheet, ok := args["sheet_id"]
-	if !ok {
-		return mcp.NewToolResultError("missing required argument: sheet_id"), nil
-	}
-	sheetID, ok := rawSheet.(string)
-	if !ok || sheetID == "" {
-		return mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string"), nil
-	}
-
-	rawTitle, ok := args["title"]
-	if !ok {
-		return mcp.NewToolResultError("missing required argument: title"), nil
-	}
-	wantTitle, ok := rawTitle.(string)
-	if !ok {
-		return mcp.NewToolResultError("invalid argument title: expected a string"), nil
-	}
-	if wantTitle == "" {
-		return mcp.NewToolResultError("invalid argument title: expected a non-empty string"), nil
-	}
-
-	sheets, toolErr2, err := statAndReadMap(absPath)
-	if err != nil {
-		return nil, err
-	}
-	if toolErr2 != nil {
-		return toolErr2, nil
-	}
-
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-
-	searchRoot := &sh.RootTopic
+// findTopicSearchRoot returns the topic at which to start the FindTopic walk (sheet root or parent_id subtree).
+func findTopicSearchRoot(sh *xmind.Sheet, args map[string]any) (searchRoot *xmind.Topic, toolErr *mcp.CallToolResult) {
 	if v, has := args["parent_id"]; has && v != nil {
 		pid, ok := v.(string)
 		if !ok {
-			return mcp.NewToolResultError("invalid argument parent_id: expected a string"), nil
+			return nil, mcp.NewToolResultError("invalid argument parent_id: expected a string")
 		}
 		if pid == "" {
-			return mcp.NewToolResultError("invalid argument parent_id: expected a non-empty string"), nil
+			return nil, mcp.NewToolResultError("invalid argument parent_id: expected a non-empty string")
 		}
 		topic := findTopicByID(&sh.RootTopic, pid)
 		if topic == nil {
-			return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", pid)), nil
+			return nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", pid))
 		}
-		searchRoot = topic
+		return topic, nil
 	}
+	return &sh.RootTopic, nil
+}
 
-	var found *xmind.Topic
-	var foundParent *xmind.Topic
+func requireFindTopicTitleArgs(args map[string]any) (wantTitle string, toolErr *mcp.CallToolResult) {
+	rawTitle, ok := args["title"]
+	if !ok {
+		return "", mcp.NewToolResultError("missing required argument: title")
+	}
+	title, ok := rawTitle.(string)
+	if !ok {
+		return "", mcp.NewToolResultError("invalid argument title: expected a string")
+	}
+	if title == "" {
+		return "", mcp.NewToolResultError("invalid argument title: expected a non-empty string")
+	}
+	return title, nil
+}
+
+func findFirstTopicByExactTitle(searchRoot *xmind.Topic, wantTitle string) (found *xmind.Topic, foundParent *xmind.Topic) {
 	walkTopics(searchRoot, 0, nil, func(t *xmind.Topic, _ int, parent *xmind.Topic) bool {
 		if t.Title == wantTitle {
 			found = t
@@ -439,11 +451,10 @@ func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (
 		}
 		return true
 	})
+	return found, foundParent
+}
 
-	if found == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: no topic with title %q", wantTitle)), nil
-	}
-
+func findTopicResponseFromMatch(sh *xmind.Sheet, found, foundParent *xmind.Topic) findTopicResponse {
 	resp := findTopicResponse{
 		ID:           found.ID,
 		Title:        found.Title,
@@ -454,6 +465,56 @@ func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (
 		resp.SiblingTitles = siblingTitlesInWalkOrder(foundParent, found.ID)
 	}
 	resp.ChildrenTitles = childTitlesInWalkOrder(found)
+	return resp
+}
+
+func findTopicWorkflow(absPath, sheetID string, args map[string]any, wantTitle string) (findTopicResponse, *mcp.CallToolResult, error) {
+	var zero findTopicResponse
+	sh, te, err := readMapAndSheet(absPath, sheetID)
+	if err != nil {
+		return zero, nil, err
+	}
+	if te != nil {
+		return zero, te, nil
+	}
+	searchRoot, re := findTopicSearchRoot(sh, args)
+	if re != nil {
+		return zero, re, nil
+	}
+	found, par := findFirstTopicByExactTitle(searchRoot, wantTitle)
+	if found == nil {
+		return zero, mcp.NewToolResultError(fmt.Sprintf("topic not found: no topic with title %q", wantTitle)), nil
+	}
+	return findTopicResponseFromMatch(sh, found, par), nil, nil
+}
+
+// FindTopic returns the first topic with an exact case-sensitive title (preorder DFS).
+// If parent_id is set, the walk starts at that topic (which may itself match).
+func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_ = ctx
+	args := req.GetArguments()
+	absPath, toolErr := absPathFromArgs(args)
+	if toolErr != nil {
+		return toolErr, nil
+	}
+
+	sheetID, serr := requireSheetIDFromArgs(args)
+	if serr != nil {
+		return serr, nil
+	}
+
+	wantTitle, terr := requireFindTopicTitleArgs(args)
+	if terr != nil {
+		return terr, nil
+	}
+
+	resp, te, err := findTopicWorkflow(absPath, sheetID, args, wantTitle)
+	if err != nil {
+		return nil, err
+	}
+	if te != nil {
+		return te, nil
+	}
 
 	out, err := json.Marshal(resp)
 	if err != nil {
@@ -504,10 +565,7 @@ type topicPropertiesChildCounts struct {
 	Summary  int `json:"summary,omitempty"`
 }
 
-func topicPropertiesResponseFrom(sh *xmind.Sheet, topic *xmind.Topic) topicPropertiesResponse {
-	if topic == nil {
-		return topicPropertiesResponse{}
-	}
+func topicPropertiesBase(topic *xmind.Topic) topicPropertiesResponse {
 	out := topicPropertiesResponse{
 		ID:             topic.ID,
 		Title:          topic.Title,
@@ -519,6 +577,10 @@ func topicPropertiesResponseFrom(sh *xmind.Sheet, topic *xmind.Topic) topicPrope
 	if len(topic.Markers) > 0 {
 		out.Markers = append([]xmind.Marker(nil), topic.Markers...)
 	}
+	return out
+}
+
+func applyTopicPropertiesMedia(out *topicPropertiesResponse, topic *xmind.Topic) {
 	if plain := plainNoteContent(topic); plain != "" {
 		out.Notes = plain
 	}
@@ -531,56 +593,85 @@ func topicPropertiesResponseFrom(sh *xmind.Sheet, topic *xmind.Topic) topicPrope
 	if topic.Position != nil {
 		out.Position = &topicPropertiesPosition{X: topic.Position.X, Y: topic.Position.Y}
 	}
-	if n := len(topic.Boundaries); n > 0 {
-		out.BoundaryCount = n
-		out.Boundaries = make([]topicPropertiesBoundary, 0, n)
-		for i := range topic.Boundaries {
-			b := &topic.Boundaries[i]
-			out.Boundaries = append(out.Boundaries, topicPropertiesBoundary{
-				ID:    b.ID,
-				Range: b.Range,
-				Title: b.Title,
-			})
-		}
+}
+
+func applyTopicPropertiesBoundaries(out *topicPropertiesResponse, topic *xmind.Topic) {
+	n := len(topic.Boundaries)
+	if n == 0 {
+		return
 	}
+	out.BoundaryCount = n
+	out.Boundaries = make([]topicPropertiesBoundary, 0, n)
+	for i := range topic.Boundaries {
+		b := &topic.Boundaries[i]
+		out.Boundaries = append(out.Boundaries, topicPropertiesBoundary{
+			ID:    b.ID,
+			Range: b.Range,
+			Title: b.Title,
+		})
+	}
+}
+
+func applyTopicPropertiesSummaryCount(out *topicPropertiesResponse, topic *xmind.Topic) {
 	if sc := len(topic.Summaries); sc > 0 {
 		out.SummaryCount = sc
 	}
-	if sh != nil && len(sh.Relationships) > 0 {
-		for i := range sh.Relationships {
-			rel := &sh.Relationships[i]
-			if rel.End1ID != topic.ID && rel.End2ID != topic.ID {
-				continue
-			}
-			item := topicPropertiesRelationship{
-				ID:     rel.ID,
-				End1ID: rel.End1ID,
-				End2ID: rel.End2ID,
-			}
-			if rel.Title != "" {
-				item.Title = rel.Title
-			}
-			out.Relationships = append(out.Relationships, item)
-		}
+}
+
+func appendTopicRelationshipsForTopic(out *topicPropertiesResponse, sh *xmind.Sheet, topicID string) {
+	if sh == nil || len(sh.Relationships) == 0 {
+		return
 	}
-	if topic.Children != nil {
-		a := len(topic.Children.Attached)
-		d := len(topic.Children.Detached)
-		s := len(topic.Children.Summary)
-		if a > 0 || d > 0 || s > 0 {
-			cc := &topicPropertiesChildCounts{}
-			if a > 0 {
-				cc.Attached = a
-			}
-			if d > 0 {
-				cc.Detached = d
-			}
-			if s > 0 {
-				cc.Summary = s
-			}
-			out.ChildCounts = cc
+	for i := range sh.Relationships {
+		rel := &sh.Relationships[i]
+		if rel.End1ID != topicID && rel.End2ID != topicID {
+			continue
 		}
+		item := topicPropertiesRelationship{
+			ID:     rel.ID,
+			End1ID: rel.End1ID,
+			End2ID: rel.End2ID,
+		}
+		if rel.Title != "" {
+			item.Title = rel.Title
+		}
+		out.Relationships = append(out.Relationships, item)
 	}
+}
+
+func topicChildCountsForResponse(topic *xmind.Topic) *topicPropertiesChildCounts {
+	if topic.Children == nil {
+		return nil
+	}
+	a := len(topic.Children.Attached)
+	d := len(topic.Children.Detached)
+	s := len(topic.Children.Summary)
+	if a == 0 && d == 0 && s == 0 {
+		return nil
+	}
+	cc := &topicPropertiesChildCounts{}
+	if a > 0 {
+		cc.Attached = a
+	}
+	if d > 0 {
+		cc.Detached = d
+	}
+	if s > 0 {
+		cc.Summary = s
+	}
+	return cc
+}
+
+func topicPropertiesResponseFrom(sh *xmind.Sheet, topic *xmind.Topic) topicPropertiesResponse {
+	if topic == nil {
+		return topicPropertiesResponse{}
+	}
+	out := topicPropertiesBase(topic)
+	applyTopicPropertiesMedia(&out, topic)
+	applyTopicPropertiesBoundaries(&out, topic)
+	applyTopicPropertiesSummaryCount(&out, topic)
+	appendTopicRelationshipsForTopic(&out, sh, topic.ID)
+	out.ChildCounts = topicChildCountsForResponse(topic)
 	return out
 }
 
