@@ -146,29 +146,13 @@ func TestWriteMapAtomicSafetyOnFailure(t *testing.T) {
 	}
 }
 
-func TestCreateNewMapFileStructure(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "new.xmind")
-	sh := Sheet{
-		ID:               uuid.New().String(),
-		RevisionID:       uuid.New().String(),
-		Class:            "sheet",
-		Title:            "S1",
-		TopicOverlapping: "overlap",
-		RootTopic: Topic{
-			ID:             uuid.New().String(),
-			Class:          "topic",
-			Title:          "Root",
-			StructureClass: "org.xmind.ui.map.clockwise",
-		},
-	}
-	if err := CreateNewMap(path, []Sheet{sh}); err != nil {
-		t.Fatal(err)
-	}
+func openZipReader(t *testing.T, path string) *zip.Reader {
+	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = f.Close() }()
+	t.Cleanup(func() { _ = f.Close() })
 	st, err := f.Stat()
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +161,11 @@ func TestCreateNewMapFileStructure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return zr
+}
+
+func assertZipHasCoreEntries(t *testing.T, zr *zip.Reader) {
+	t.Helper()
 	want := map[string]struct{}{
 		"content.json":  {},
 		"metadata.json": {},
@@ -192,6 +181,10 @@ func TestCreateNewMapFileStructure(t *testing.T) {
 			t.Fatalf("missing zip entry %q, have %v", name, got)
 		}
 	}
+}
+
+func assertMetadataCreatorName(t *testing.T, zr *zip.Reader, want string) {
+	t.Helper()
 	var metaEntry *zip.File
 	for i := range zr.File {
 		if zr.File[i].Name == "metadata.json" {
@@ -219,9 +212,32 @@ func TestCreateNewMapFileStructure(t *testing.T) {
 	if err := json.Unmarshal(metaBytes, &meta); err != nil {
 		t.Fatalf("metadata.json: %v", err)
 	}
-	if meta.Creator.Name != "xmind-mcp" {
-		t.Fatalf("creator.name: got %q want xmind-mcp", meta.Creator.Name)
+	if meta.Creator.Name != want {
+		t.Fatalf("creator.name: got %q want %q", meta.Creator.Name, want)
 	}
+}
+
+func TestCreateNewMapFileStructure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new.xmind")
+	sh := Sheet{
+		ID:               uuid.New().String(),
+		RevisionID:       uuid.New().String(),
+		Class:            "sheet",
+		Title:            "S1",
+		TopicOverlapping: "overlap",
+		RootTopic: Topic{
+			ID:             uuid.New().String(),
+			Class:          "topic",
+			Title:          "Root",
+			StructureClass: "org.xmind.ui.map.clockwise",
+		},
+	}
+	if err := CreateNewMap(path, []Sheet{sh}); err != nil {
+		t.Fatal(err)
+	}
+	zr := openZipReader(t, path)
+	assertZipHasCoreEntries(t, zr)
+	assertMetadataCreatorName(t, zr, "xmind-mcp")
 }
 
 func TestCreateNewMapReadBack(t *testing.T) {

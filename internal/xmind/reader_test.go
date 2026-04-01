@@ -148,6 +148,50 @@ func findSheetByTitle(sheets []Sheet, title string) *Sheet {
 	return nil
 }
 
+func assertKitchenSinkSheet10Labels(t *testing.T, root *Topic) {
+	t.Helper()
+	labelTopic := findTopicByID(root, "9b558db8-cdf3-47ab-a6b0-ee688aa3ad58")
+	if labelTopic == nil || len(labelTopic.Labels) != 1 || labelTopic.Labels[0] != "foo" {
+		t.Fatalf("labels: %+v", labelTopic)
+	}
+}
+
+func assertKitchenSinkSheet10Notes(t *testing.T, root *Topic) {
+	t.Helper()
+	noteTopic := findTopicByID(root, "83785e34-fcdb-4049-8c42-15052c20d8d6")
+	if noteTopic == nil || noteTopic.Notes == nil || noteTopic.Notes.Plain == nil ||
+		!strings.HasPrefix(noteTopic.Notes.Plain.Content, "This is a simple, plain text note") {
+		t.Fatalf("notes: %+v", noteTopic)
+	}
+}
+
+func assertKitchenSinkSheet10Href(t *testing.T, root *Topic) {
+	t.Helper()
+	hrefTopic := findTopicByID(root, "e0d8096f-cc1a-4c33-bcc5-db9006481f85")
+	if hrefTopic == nil || hrefTopic.Href != "https://www.google.com" {
+		t.Fatalf("href: %+v", hrefTopic)
+	}
+}
+
+func assertKitchenSinkSheet10AudioExtension(t *testing.T, root *Topic) {
+	t.Helper()
+	audioTopic := findTopicByID(root, "9a8153a4-0ac2-4a5c-bc46-db9a0f38e47c")
+	if audioTopic == nil || len(audioTopic.Extensions) != 1 {
+		t.Fatalf("extensions count: %+v", audioTopic)
+	}
+	if audioTopic.Extensions[0].Provider != "org.xmind.ui.audionotes" || len(audioTopic.Extensions[0].ResourceRefs) != 1 {
+		t.Fatalf("audio extension: %+v", audioTopic.Extensions[0])
+	}
+}
+
+func assertKitchenSinkSheet11Markers(t *testing.T, root *Topic) {
+	t.Helper()
+	mkTopic := findTopicByID(root, "30888fa1-f425-43e3-a7ce-98d5d7db9578")
+	if mkTopic == nil || len(mkTopic.Markers) != 1 || mkTopic.Markers[0].MarkerID != "priority-1" {
+		t.Fatalf("markers: %+v", mkTopic)
+	}
+}
+
 // TestReadMapMetadataFields uses Sheet 10 (Topic Properties) and Sheet 11 (Markers) from the
 // kitchen sink — the first sheet (Mind Map) has no labeled/marker/note/href/extension samples.
 func TestReadMapMetadataFields(t *testing.T) {
@@ -159,35 +203,17 @@ func TestReadMapMetadataFields(t *testing.T) {
 	if prop == nil {
 		t.Fatal("missing Sheet 10 - Topic Properties")
 	}
-	labelTopic := findTopicByID(&prop.RootTopic, "9b558db8-cdf3-47ab-a6b0-ee688aa3ad58")
-	if labelTopic == nil || len(labelTopic.Labels) != 1 || labelTopic.Labels[0] != "foo" {
-		t.Fatalf("labels: %+v", labelTopic)
-	}
-	noteTopic := findTopicByID(&prop.RootTopic, "83785e34-fcdb-4049-8c42-15052c20d8d6")
-	if noteTopic == nil || noteTopic.Notes == nil || noteTopic.Notes.Plain == nil ||
-		!strings.HasPrefix(noteTopic.Notes.Plain.Content, "This is a simple, plain text note") {
-		t.Fatalf("notes: %+v", noteTopic)
-	}
-	hrefTopic := findTopicByID(&prop.RootTopic, "e0d8096f-cc1a-4c33-bcc5-db9006481f85")
-	if hrefTopic == nil || hrefTopic.Href != "https://www.google.com" {
-		t.Fatalf("href: %+v", hrefTopic)
-	}
-	audioTopic := findTopicByID(&prop.RootTopic, "9a8153a4-0ac2-4a5c-bc46-db9a0f38e47c")
-	if audioTopic == nil || len(audioTopic.Extensions) != 1 {
-		t.Fatalf("extensions count: %+v", audioTopic)
-	}
-	if audioTopic.Extensions[0].Provider != "org.xmind.ui.audionotes" || len(audioTopic.Extensions[0].ResourceRefs) != 1 {
-		t.Fatalf("audio extension: %+v", audioTopic.Extensions[0])
-	}
+	rt := &prop.RootTopic
+	assertKitchenSinkSheet10Labels(t, rt)
+	assertKitchenSinkSheet10Notes(t, rt)
+	assertKitchenSinkSheet10Href(t, rt)
+	assertKitchenSinkSheet10AudioExtension(t, rt)
 
 	markersSh := findSheetByTitle(sheets, "Sheet 11 - Markers")
 	if markersSh == nil {
 		t.Fatal("missing Sheet 11 - Markers")
 	}
-	mkTopic := findTopicByID(&markersSh.RootTopic, "30888fa1-f425-43e3-a7ce-98d5d7db9578")
-	if mkTopic == nil || len(mkTopic.Markers) != 1 || mkTopic.Markers[0].MarkerID != "priority-1" {
-		t.Fatalf("markers: %+v", mkTopic)
-	}
+	assertKitchenSinkSheet11Markers(t, &markersSh.RootTopic)
 }
 
 func TestReadMapRelationships(t *testing.T) {
@@ -272,6 +298,33 @@ func TestReadMapDoesNotModifyKitchenSink(t *testing.T) {
 	}
 }
 
+func assertRoundTripRootTitlesMatch(t *testing.T, sheets1, sheets2 []Sheet) {
+	t.Helper()
+	if len(sheets2) != len(sheets1) {
+		t.Fatalf("sheet count after write: got %d want %d", len(sheets2), len(sheets1))
+	}
+	for i := range sheets1 {
+		if sheets2[i].RootTopic.Title != sheets1[i].RootTopic.Title {
+			t.Fatalf("sheet %d root title: got %q want %q", i, sheets2[i].RootTopic.Title, sheets1[i].RootTopic.Title)
+		}
+	}
+}
+
+func assertMarshaledSheetsEqual(t *testing.T, sheets1, sheets2 []Sheet) {
+	t.Helper()
+	b1, err := json.Marshal(sheets1)
+	if err != nil {
+		t.Fatalf("marshal sheets1: %v", err)
+	}
+	b2, err := json.Marshal(sheets2)
+	if err != nil {
+		t.Fatalf("marshal sheets2: %v", err)
+	}
+	if !bytes.Equal(b1, b2) {
+		t.Fatalf("round-trip JSON mismatch (len %d vs %d)", len(b1), len(b2))
+	}
+}
+
 func TestWriteMapRoundTrip(t *testing.T) {
 	src := kitchenSinkPath(t)
 	dir := t.TempDir()
@@ -296,27 +349,8 @@ func TestWriteMapRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMap after write: %v", err)
 	}
-	if len(sheets2) != len(sheets1) {
-		t.Fatalf("sheet count after write: got %d want %d", len(sheets2), len(sheets1))
-	}
-
-	for i := range sheets1 {
-		if sheets2[i].RootTopic.Title != sheets1[i].RootTopic.Title {
-			t.Fatalf("sheet %d root title: got %q want %q", i, sheets2[i].RootTopic.Title, sheets1[i].RootTopic.Title)
-		}
-	}
-
-	b1, err := json.Marshal(sheets1)
-	if err != nil {
-		t.Fatalf("marshal sheets1: %v", err)
-	}
-	b2, err := json.Marshal(sheets2)
-	if err != nil {
-		t.Fatalf("marshal sheets2: %v", err)
-	}
-	if !bytes.Equal(b1, b2) {
-		t.Fatalf("round-trip JSON mismatch (len %d vs %d)", len(b1), len(b2))
-	}
+	assertRoundTripRootTitlesMatch(t, sheets1, sheets2)
+	assertMarshaledSheetsEqual(t, sheets1, sheets2)
 }
 
 func copyFile(src, dst string) error {

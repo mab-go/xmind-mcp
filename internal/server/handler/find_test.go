@@ -61,6 +61,161 @@ func assertSubtreeNoHrefField(t *testing.T, n *subtreeNode) {
 	}
 }
 
+func mustGetSubtreeJSON(t *testing.T, h *XMindHandler, args map[string]any) subtreeNode {
+	t.Helper()
+	res := callTool(t, h.GetSubtree, args)
+	if res.IsError {
+		t.Fatalf("GetSubtree: %s", textContent(t, res))
+	}
+	var node subtreeNode
+	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return node
+}
+
+func mustGetTopicPropertiesJSON(t *testing.T, h *XMindHandler, path, sheetID, topicID string) topicPropertiesResponse {
+	t.Helper()
+	res := callTool(t, h.GetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sheetID, "topic_id": topicID,
+	})
+	if res.IsError {
+		t.Fatalf("GetTopicProperties: %s", textContent(t, res))
+	}
+	var out topicPropertiesResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return out
+}
+
+func rootTopicIDForSheetTitle(t *testing.T, title string) string {
+	t.Helper()
+	sheets, err := xmind.ReadMap(kitchenSinkPath(t))
+	if err != nil {
+		t.Fatalf("ReadMap: %v", err)
+	}
+	for i := range sheets {
+		if sheets[i].Title == title {
+			return sheets[i].RootTopic.ID
+		}
+	}
+	t.Fatalf("sheet not found: %s", title)
+	return ""
+}
+
+type kitchenSinkTopicRefs struct {
+	boundarySheetID, boundaryTopicID string
+	summarySheetID, summaryTopicID   string
+	posSheetID, posTopicID           string
+}
+
+func updateKitchenSinkTopicRefs(refs *kitchenSinkTopicRefs, sh *xmind.Sheet, topic *xmind.Topic) {
+	if refs.boundarySheetID == "" && len(topic.Boundaries) > 0 {
+		refs.boundarySheetID = sh.ID
+		refs.boundaryTopicID = topic.ID
+	}
+	if refs.summarySheetID == "" && len(topic.Summaries) > 0 {
+		refs.summarySheetID = sh.ID
+		refs.summaryTopicID = topic.ID
+	}
+	if refs.posSheetID == "" && topic.Position != nil {
+		refs.posSheetID = sh.ID
+		refs.posTopicID = topic.ID
+	}
+}
+
+func requireKitchenSinkTopicRefs(t *testing.T, refs *kitchenSinkTopicRefs) {
+	t.Helper()
+	if refs.boundarySheetID == "" || refs.boundaryTopicID == "" {
+		t.Fatal("kitchen-sink fixture must include a topic with boundaries (see AGENTS.md test fixture)")
+	}
+	if refs.summarySheetID == "" || refs.summaryTopicID == "" {
+		t.Fatal("kitchen-sink fixture must include a topic with summaries (see AGENTS.md test fixture)")
+	}
+	if refs.posSheetID == "" || refs.posTopicID == "" {
+		t.Fatal("kitchen-sink fixture must include a topic with position (floating topic; see AGENTS.md test fixture)")
+	}
+}
+
+func scanKitchenSinkBoundarySummaryPosition(t *testing.T, sheets []xmind.Sheet) kitchenSinkTopicRefs {
+	t.Helper()
+	var refs kitchenSinkTopicRefs
+	for si := range sheets {
+		sh := &sheets[si]
+		walkTopics(&sh.RootTopic, 0, nil, func(topic *xmind.Topic, _ int, _ *xmind.Topic) bool {
+			updateKitchenSinkTopicRefs(&refs, sh, topic)
+			return true
+		})
+	}
+	requireKitchenSinkTopicRefs(t, &refs)
+	return refs
+}
+
+func assertBoundaryTopicPropertiesNonEmpty(t *testing.T, out topicPropertiesResponse) {
+	t.Helper()
+	if out.BoundaryCount != len(out.Boundaries) || out.BoundaryCount < 1 {
+		t.Fatalf("boundaryCount/boundaries: %+v", out)
+	}
+}
+
+func assertSummaryTopicPropertiesNonEmpty(t *testing.T, out topicPropertiesResponse) {
+	t.Helper()
+	if out.SummaryCount < 1 {
+		t.Fatalf("summaryCount: got %+v", out)
+	}
+}
+
+func assertPositionTopicPropertiesPresent(t *testing.T, out topicPropertiesResponse) {
+	t.Helper()
+	if out.Position == nil {
+		t.Fatal("expected position on floating topic")
+	}
+}
+
+func relationshipsSheetOrFatal(t *testing.T, sheets []xmind.Sheet) *xmind.Sheet {
+	t.Helper()
+	for i := range sheets {
+		if sheets[i].ID == kitchenSinkRelationshipsSheetID {
+			return &sheets[i]
+		}
+	}
+	t.Fatal("relationships sheet not found")
+	return nil
+}
+
+func countRelationshipsInvolvingEnd(sh *xmind.Sheet, endID string) int {
+	n := 0
+	for i := range sh.Relationships {
+		r := &sh.Relationships[i]
+		if r.End1ID == endID || r.End2ID == endID {
+			n++
+		}
+	}
+	return n
+}
+
+func assertTopicPropertiesRelationshipsMatchSheet(t *testing.T, sh *xmind.Sheet, end1 string, out topicPropertiesResponse) {
+	t.Helper()
+	byID := make(map[string]topicPropertiesRelationship, len(out.Relationships))
+	for _, r := range out.Relationships {
+		byID[r.ID] = r
+	}
+	for i := range sh.Relationships {
+		r := &sh.Relationships[i]
+		if r.End1ID != end1 && r.End2ID != end1 {
+			continue
+		}
+		got, ok := byID[r.ID]
+		if !ok {
+			t.Fatalf("missing relationship id %s in response", r.ID)
+		}
+		if got.End1ID != r.End1ID || got.End2ID != r.End2ID {
+			t.Fatalf("endpoint mismatch for %s: got %+v want End1=%q End2=%q", r.ID, got, r.End1ID, r.End2ID)
+		}
+	}
+}
+
 func firstKitchenSinkSheetID(t *testing.T) string {
 	t.Helper()
 	sheets, err := xmind.ReadMap(kitchenSinkPath(t))
@@ -642,19 +797,10 @@ func TestGetSubtreeDepthZero(t *testing.T) {
 
 func TestGetSubtreeSheet10StructureClassNotesHref(t *testing.T) {
 	h := NewXMindHandler()
+	path := kitchenSinkPath(t)
 	sid := kitchenSinkSheetIDByTitle(t, kitchenSinkSheet10Title)
 
-	res := callTool(t, h.GetSubtree, map[string]any{
-		"path":     kitchenSinkPath(t),
-		"sheet_id": sid,
-	})
-	if res.IsError {
-		t.Fatalf("GetSubtree: %s", textContent(t, res))
-	}
-	var root subtreeNode
-	if err := json.Unmarshal([]byte(textContent(t, res)), &root); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	root := mustGetSubtreeJSON(t, h, map[string]any{"path": path, "sheet_id": sid})
 	if root.Title != "Central Topic" {
 		t.Fatalf("title: %q", root.Title)
 	}
@@ -662,66 +808,26 @@ func TestGetSubtreeSheet10StructureClassNotesHref(t *testing.T) {
 		t.Fatalf("structureClass: got %q", root.StructureClass)
 	}
 
-	resNotes := callTool(t, h.GetSubtree, map[string]any{
-		"path":          kitchenSinkPath(t),
-		"sheet_id":      sid,
-		"topic_id":      kitchenSinkSheet10NoteTopicID,
-		"include_notes": true,
+	noteNode := mustGetSubtreeJSON(t, h, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": kitchenSinkSheet10NoteTopicID, "include_notes": true,
 	})
-	if resNotes.IsError {
-		t.Fatalf("GetSubtree: %s", textContent(t, resNotes))
-	}
-	var noteNode subtreeNode
-	if err := json.Unmarshal([]byte(textContent(t, resNotes)), &noteNode); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
 	if !strings.HasPrefix(noteNode.Notes, "This is a simple, plain text note") {
 		t.Fatalf("notes: %q", noteNode.Notes)
 	}
 
-	resNoNotes := callTool(t, h.GetSubtree, map[string]any{
-		"path":          kitchenSinkPath(t),
-		"sheet_id":      sid,
-		"topic_id":      kitchenSinkSheet10NoteTopicID,
-		"include_notes": false,
+	noNotesTree := mustGetSubtreeJSON(t, h, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": kitchenSinkSheet10NoteTopicID, "include_notes": false,
 	})
-	if resNoNotes.IsError {
-		t.Fatalf("GetSubtree: %s", textContent(t, resNoNotes))
-	}
-	var noNotesTree subtreeNode
-	if err := json.Unmarshal([]byte(textContent(t, resNoNotes)), &noNotesTree); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
 	assertSubtreeNoNotesField(t, &noNotesTree)
 
-	resNoHref := callTool(t, h.GetSubtree, map[string]any{
-		"path":          kitchenSinkPath(t),
-		"sheet_id":      sid,
-		"topic_id":      kitchenSinkSheet10HrefTopicID,
-		"include_links": false,
+	noHrefTree := mustGetSubtreeJSON(t, h, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": kitchenSinkSheet10HrefTopicID, "include_links": false,
 	})
-	if resNoHref.IsError {
-		t.Fatalf("GetSubtree: %s", textContent(t, resNoHref))
-	}
-	var noHrefTree subtreeNode
-	if err := json.Unmarshal([]byte(textContent(t, resNoHref)), &noHrefTree); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
 	assertSubtreeNoHrefField(t, &noHrefTree)
 
-	resHref := callTool(t, h.GetSubtree, map[string]any{
-		"path":          kitchenSinkPath(t),
-		"sheet_id":      sid,
-		"topic_id":      kitchenSinkSheet10HrefTopicID,
-		"include_links": true,
+	hrefNode := mustGetSubtreeJSON(t, h, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": kitchenSinkSheet10HrefTopicID, "include_links": true,
 	})
-	if resHref.IsError {
-		t.Fatalf("GetSubtree: %s", textContent(t, resHref))
-	}
-	var hrefNode subtreeNode
-	if err := json.Unmarshal([]byte(textContent(t, resHref)), &hrefNode); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
 	if hrefNode.Href != "https://www.google.com" {
 		t.Fatalf("href: %q", hrefNode.Href)
 	}
@@ -802,67 +908,21 @@ func TestGetSubtreeDepthWithIncludeFlags(t *testing.T) {
 
 func TestGetTopicPropertiesSheet10NotesHrefStructureClass(t *testing.T) {
 	h := NewXMindHandler()
+	path := kitchenSinkPath(t)
 	sid := kitchenSinkSheetIDByTitle(t, kitchenSinkSheet10Title)
+	rootID := rootTopicIDForSheetTitle(t, kitchenSinkSheet10Title)
 
-	sheets, err := xmind.ReadMap(kitchenSinkPath(t))
-	if err != nil {
-		t.Fatalf("ReadMap: %v", err)
-	}
-	var rootID string
-	for i := range sheets {
-		if sheets[i].Title == kitchenSinkSheet10Title {
-			rootID = sheets[i].RootTopic.ID
-			break
-		}
-	}
-	if rootID == "" {
-		t.Fatal("sheet 10 not found")
-	}
-
-	resRoot := callTool(t, h.GetTopicProperties, map[string]any{
-		"path":     kitchenSinkPath(t),
-		"sheet_id": sid,
-		"topic_id": rootID,
-	})
-	if resRoot.IsError {
-		t.Fatalf("GetTopicProperties: %s", textContent(t, resRoot))
-	}
-	var rootProps topicPropertiesResponse
-	if err := json.Unmarshal([]byte(textContent(t, resRoot)), &rootProps); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	rootProps := mustGetTopicPropertiesJSON(t, h, path, sid, rootID)
 	if rootProps.StructureClass != "org.xmind.ui.map.clockwise" {
 		t.Fatalf("structureClass: got %q", rootProps.StructureClass)
 	}
 
-	resNotes := callTool(t, h.GetTopicProperties, map[string]any{
-		"path":     kitchenSinkPath(t),
-		"sheet_id": sid,
-		"topic_id": kitchenSinkSheet10NoteTopicID,
-	})
-	if resNotes.IsError {
-		t.Fatalf("GetTopicProperties: %s", textContent(t, resNotes))
-	}
-	var noteProps topicPropertiesResponse
-	if err := json.Unmarshal([]byte(textContent(t, resNotes)), &noteProps); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	noteProps := mustGetTopicPropertiesJSON(t, h, path, sid, kitchenSinkSheet10NoteTopicID)
 	if !strings.HasPrefix(noteProps.Notes, "This is a simple, plain text note") {
 		t.Fatalf("notes: %q", noteProps.Notes)
 	}
 
-	resHref := callTool(t, h.GetTopicProperties, map[string]any{
-		"path":     kitchenSinkPath(t),
-		"sheet_id": sid,
-		"topic_id": kitchenSinkSheet10HrefTopicID,
-	})
-	if resHref.IsError {
-		t.Fatalf("GetTopicProperties: %s", textContent(t, resHref))
-	}
-	var hrefProps topicPropertiesResponse
-	if err := json.Unmarshal([]byte(textContent(t, resHref)), &hrefProps); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	hrefProps := mustGetTopicPropertiesJSON(t, h, path, sid, kitchenSinkSheet10HrefTopicID)
 	if hrefProps.Href != "https://www.google.com" {
 		t.Fatalf("href: %q", hrefProps.Href)
 	}
@@ -875,60 +935,18 @@ func TestGetTopicPropertiesRelationshipsFiltered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMap: %v", err)
 	}
-	var sh *xmind.Sheet
-	for i := range sheets {
-		if sheets[i].ID == kitchenSinkRelationshipsSheetID {
-			sh = &sheets[i]
-			break
-		}
-	}
-	if sh == nil {
-		t.Fatal("relationships sheet not found")
-	}
+	sh := relationshipsSheetOrFatal(t, sheets)
 	if len(sh.Relationships) == 0 {
 		t.Fatal("expected at least one relationship on kitchen-sink relationships sheet")
 	}
 	end1 := sh.Relationships[0].End1ID
-	var wantCount int
-	for i := range sh.Relationships {
-		r := &sh.Relationships[i]
-		if r.End1ID == end1 || r.End2ID == end1 {
-			wantCount++
-		}
-	}
+	wantCount := countRelationshipsInvolvingEnd(sh, end1)
 
-	res := callTool(t, h.GetTopicProperties, map[string]any{
-		"path":     path,
-		"sheet_id": kitchenSinkRelationshipsSheetID,
-		"topic_id": end1,
-	})
-	if res.IsError {
-		t.Fatalf("GetTopicProperties: %s", textContent(t, res))
-	}
-	var out topicPropertiesResponse
-	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	out := mustGetTopicPropertiesJSON(t, h, path, kitchenSinkRelationshipsSheetID, end1)
 	if len(out.Relationships) != wantCount {
 		t.Fatalf("relationships: got %d want %d", len(out.Relationships), wantCount)
 	}
-	byID := make(map[string]topicPropertiesRelationship, len(out.Relationships))
-	for _, r := range out.Relationships {
-		byID[r.ID] = r
-	}
-	for i := range sh.Relationships {
-		r := &sh.Relationships[i]
-		if r.End1ID != end1 && r.End2ID != end1 {
-			continue
-		}
-		got, ok := byID[r.ID]
-		if !ok {
-			t.Fatalf("missing relationship id %s in response", r.ID)
-		}
-		if got.End1ID != r.End1ID || got.End2ID != r.End2ID {
-			t.Fatalf("endpoint mismatch for %s: got %+v want End1=%q End2=%q", r.ID, got, r.End1ID, r.End2ID)
-		}
-	}
+	assertTopicPropertiesRelationshipsMatchSheet(t, sh, end1, out)
 }
 
 func TestGetTopicPropertiesKitchenSinkBoundarySummaryPosition(t *testing.T) {
@@ -937,86 +955,11 @@ func TestGetTopicPropertiesKitchenSinkBoundarySummaryPosition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMap: %v", err)
 	}
-	var boundarySheetID, boundaryTopicID string
-	var summarySheetID, summaryTopicID string
-	var posSheetID, posTopicID string
-	for si := range sheets {
-		sh := &sheets[si]
-		walkTopics(&sh.RootTopic, 0, nil, func(topic *xmind.Topic, _ int, _ *xmind.Topic) bool {
-			if boundarySheetID == "" && len(topic.Boundaries) > 0 {
-				boundarySheetID = sh.ID
-				boundaryTopicID = topic.ID
-			}
-			if summarySheetID == "" && len(topic.Summaries) > 0 {
-				summarySheetID = sh.ID
-				summaryTopicID = topic.ID
-			}
-			if posSheetID == "" && topic.Position != nil {
-				posSheetID = sh.ID
-				posTopicID = topic.ID
-			}
-			return true
-		})
-	}
-	if boundarySheetID == "" || boundaryTopicID == "" {
-		t.Fatal("kitchen-sink fixture must include a topic with boundaries (see AGENTS.md test fixture)")
-	}
-	if summarySheetID == "" || summaryTopicID == "" {
-		t.Fatal("kitchen-sink fixture must include a topic with summaries (see AGENTS.md test fixture)")
-	}
-	if posSheetID == "" || posTopicID == "" {
-		t.Fatal("kitchen-sink fixture must include a topic with position (floating topic; see AGENTS.md test fixture)")
-	}
-
+	refs := scanKitchenSinkBoundarySummaryPosition(t, sheets)
 	h := NewXMindHandler()
-
-	resB := callTool(t, h.GetTopicProperties, map[string]any{
-		"path":     path,
-		"sheet_id": boundarySheetID,
-		"topic_id": boundaryTopicID,
-	})
-	if resB.IsError {
-		t.Fatalf("GetTopicProperties (boundary): %s", textContent(t, resB))
-	}
-	var bOut topicPropertiesResponse
-	if err := json.Unmarshal([]byte(textContent(t, resB)), &bOut); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if bOut.BoundaryCount != len(bOut.Boundaries) || bOut.BoundaryCount < 1 {
-		t.Fatalf("boundaryCount/boundaries: %+v", bOut)
-	}
-
-	resS := callTool(t, h.GetTopicProperties, map[string]any{
-		"path":     path,
-		"sheet_id": summarySheetID,
-		"topic_id": summaryTopicID,
-	})
-	if resS.IsError {
-		t.Fatalf("GetTopicProperties (summary): %s", textContent(t, resS))
-	}
-	var sOut topicPropertiesResponse
-	if err := json.Unmarshal([]byte(textContent(t, resS)), &sOut); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if sOut.SummaryCount < 1 {
-		t.Fatalf("summaryCount: got %+v", sOut)
-	}
-
-	resP := callTool(t, h.GetTopicProperties, map[string]any{
-		"path":     path,
-		"sheet_id": posSheetID,
-		"topic_id": posTopicID,
-	})
-	if resP.IsError {
-		t.Fatalf("GetTopicProperties (position): %s", textContent(t, resP))
-	}
-	var pOut topicPropertiesResponse
-	if err := json.Unmarshal([]byte(textContent(t, resP)), &pOut); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if pOut.Position == nil {
-		t.Fatal("expected position on floating topic")
-	}
+	assertBoundaryTopicPropertiesNonEmpty(t, mustGetTopicPropertiesJSON(t, h, path, refs.boundarySheetID, refs.boundaryTopicID))
+	assertSummaryTopicPropertiesNonEmpty(t, mustGetTopicPropertiesJSON(t, h, path, refs.summarySheetID, refs.summaryTopicID))
+	assertPositionTopicPropertiesPresent(t, mustGetTopicPropertiesJSON(t, h, path, refs.posSheetID, refs.posTopicID))
 }
 
 func TestGetTopicPropertiesUnknownTopic(t *testing.T) {
