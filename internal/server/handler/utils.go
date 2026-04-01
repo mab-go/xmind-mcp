@@ -35,13 +35,9 @@ func (h *XMindHandler) FlattenToOutline(ctx context.Context, req mcp.CallToolReq
 	if terr != nil {
 		return terr, nil
 	}
-
-	format := "markdown"
-	if v, ok := args["format"].(string); ok && v != "" {
-		format = v
-	}
-	if format != "text" && format != "markdown" {
-		return mcp.NewToolResultError(`invalid argument format: expected "text" or "markdown"`), nil
+	format, includeNotes, optErr := outlineExportOptionsFromArgs(args)
+	if optErr != nil {
+		return optErr, nil
 	}
 
 	sheets, toolErr2, err := statAndReadMap(absPath)
@@ -56,24 +52,81 @@ func (h *XMindHandler) FlattenToOutline(ctx context.Context, req mcp.CallToolReq
 		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
 	}
 
-	var start *xmind.Topic
-	if v, ok := args["topic_id"].(string); ok && v != "" {
-		start = findTopicByID(&sh.RootTopic, v)
-		if start == nil {
-			return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", v)), nil
-		}
-	} else {
-		start = &sh.RootTopic
-	}
-
-	includeNotes, berr := parseBoolOptional(args, "include_notes")
-	if berr != nil {
-		return berr, nil
+	start, stErr := outlineStartTopic(sh, args)
+	if stErr != nil {
+		return stErr, nil
 	}
 
 	var b strings.Builder
 	flattenTopicWrite(&b, start, 0, format, includeNotes)
 	return textResult(strings.TrimRight(b.String(), "\n")), nil
+}
+
+func outlineExportOptionsFromArgs(args map[string]any) (format string, includeNotes bool, toolErr *mcp.CallToolResult) {
+	format = "markdown"
+	if v, ok := args["format"].(string); ok && v != "" {
+		format = v
+	}
+	if format != "text" && format != "markdown" {
+		return "", false, mcp.NewToolResultError(`invalid argument format: expected "text" or "markdown"`)
+	}
+	var err *mcp.CallToolResult
+	includeNotes, err = parseBoolOptional(args, "include_notes")
+	if err != nil {
+		return "", false, err
+	}
+	return format, includeNotes, nil
+}
+
+func outlineStartTopic(sh *xmind.Sheet, args map[string]any) (*xmind.Topic, *mcp.CallToolResult) {
+	if v, ok := args["topic_id"].(string); ok && v != "" {
+		start := findTopicByID(&sh.RootTopic, v)
+		if start == nil {
+			return nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", v))
+		}
+		return start, nil
+	}
+	return &sh.RootTopic, nil
+}
+
+func flattenTopicWriteText(b *strings.Builder, title, plain string, depth int, hasNotes bool) {
+	b.WriteString(strings.Repeat(" ", depth*2))
+	b.WriteString(title)
+	b.WriteByte('\n')
+	if !hasNotes {
+		return
+	}
+	noteIndent := strings.Repeat(" ", depth*2+4)
+	for _, line := range strings.Split(plain, "\n") {
+		b.WriteString(noteIndent)
+		b.WriteString("[note] ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+}
+
+func flattenTopicWriteMarkdown(b *strings.Builder, title, plain string, depth int, hasNotes bool) {
+	// Use heading lines at every depth so import heading-mode parses the full tree (list lines would be ignored).
+	level := depth + 1
+	if level > 6 {
+		level = 6
+	}
+	b.WriteString(strings.Repeat("#", level))
+	b.WriteString(" ")
+	b.WriteString(title)
+	b.WriteByte('\n')
+	if hasNotes {
+		for _, line := range strings.Split(plain, "\n") {
+			b.WriteString("> ")
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		b.WriteByte('\n')
+		return
+	}
+	if depth == 0 {
+		b.WriteByte('\n')
+	}
 }
 
 func flattenTopicWrite(b *strings.Builder, t *xmind.Topic, depth int, format string, includeNotes bool) {
@@ -87,38 +140,9 @@ func flattenTopicWrite(b *strings.Builder, t *xmind.Topic, depth int, format str
 
 	switch format {
 	case "text":
-		b.WriteString(strings.Repeat(" ", depth*2))
-		b.WriteString(title)
-		b.WriteByte('\n')
-		if hasNotes {
-			noteIndent := strings.Repeat(" ", depth*2+4)
-			for _, line := range strings.Split(plain, "\n") {
-				b.WriteString(noteIndent)
-				b.WriteString("[note] ")
-				b.WriteString(line)
-				b.WriteByte('\n')
-			}
-		}
+		flattenTopicWriteText(b, title, plain, depth, hasNotes)
 	case "markdown":
-		// Use heading lines at every depth so import heading-mode parses the full tree (list lines would be ignored).
-		level := depth + 1
-		if level > 6 {
-			level = 6
-		}
-		b.WriteString(strings.Repeat("#", level))
-		b.WriteString(" ")
-		b.WriteString(title)
-		b.WriteByte('\n')
-		if hasNotes {
-			for _, line := range strings.Split(plain, "\n") {
-				b.WriteString("> ")
-				b.WriteString(line)
-				b.WriteByte('\n')
-			}
-			b.WriteByte('\n')
-		} else if depth == 0 {
-			b.WriteByte('\n')
-		}
+		flattenTopicWriteMarkdown(b, title, plain, depth, hasNotes)
 	}
 	if t == nil || t.Children == nil {
 		return
@@ -140,16 +164,9 @@ func (h *XMindHandler) ImportFromOutline(ctx context.Context, req mcp.CallToolRe
 	if terr != nil {
 		return terr, nil
 	}
-
-	var sheetIDArg, parentIDArg string
-	if v, ok := args["sheet_id"].(string); ok {
-		sheetIDArg = v
-	}
-	if v, ok := args["parent_id"].(string); ok && v != "" {
-		parentIDArg = v
-	}
-	if parentIDArg != "" && sheetIDArg == "" {
-		return mcp.NewToolResultError("invalid arguments: parent_id requires sheet_id (omit parent_id when creating a new sheet)"), nil
+	sheetIDArg, parentIDArg, aerr := parseImportOutlineSheetArgs(args)
+	if aerr != nil {
+		return aerr, nil
 	}
 
 	pairs := parseOutlineToPairs(outline)
@@ -168,45 +185,63 @@ func (h *XMindHandler) ImportFromOutline(ctx context.Context, req mcp.CallToolRe
 	}
 
 	if sheetIDArg == "" {
-		// New sheet: single tree; first line is sheet+root title; extra depth-0 lines are children of root.
-		root := buildOutlineTreeSingleRoot(pairs)
-		if root == nil {
-			return mcp.NewToolResultError("could not build outline tree"), nil
-		}
-		bumpAllSheetsRevisionID(sheets)
-		sh := newSheet(root.title, root.title)
-		ch := ensureChildren(&sh.RootTopic)
-		for _, c := range root.children {
-			ch.Attached = append(ch.Attached, outlineNodeToTopics(c))
-		}
-		sheets = append(sheets, sh)
-		if err := xmind.WriteMap(absPath, sheets); err != nil {
-			return nil, fmt.Errorf("write map: %w", err)
-		}
-		n := countTopics(&sh.RootTopic)
-		return textResult(fmt.Sprintf("imported %d topics into new sheet id %s", n, sh.ID)), nil
+		return importOutlineNewSheet(absPath, sheets, pairs)
 	}
+	return importOutlineAppend(absPath, sheets, sheetIDArg, parentIDArg, pairs)
+}
 
-	sh := findSheetByID(sheets, sheetIDArg)
+func parseImportOutlineSheetArgs(args map[string]any) (sheetID, parentID string, toolErr *mcp.CallToolResult) {
+	if v, ok := args["sheet_id"].(string); ok {
+		sheetID = v
+	}
+	if v, ok := args["parent_id"].(string); ok && v != "" {
+		parentID = v
+	}
+	if parentID != "" && sheetID == "" {
+		return "", "", mcp.NewToolResultError("invalid arguments: parent_id requires sheet_id (omit parent_id when creating a new sheet)")
+	}
+	return sheetID, parentID, nil
+}
+
+// importOutlineNewSheet: single tree; first line is sheet+root title; extra depth-0 lines are children of root.
+func importOutlineNewSheet(absPath string, sheets []xmind.Sheet, pairs []outlinePair) (*mcp.CallToolResult, error) {
+	root := buildOutlineTreeSingleRoot(pairs)
+	if root == nil {
+		return mcp.NewToolResultError("could not build outline tree"), nil
+	}
+	bumpAllSheetsRevisionID(sheets)
+	sh := newSheet(root.title, root.title)
+	ch := ensureChildren(&sh.RootTopic)
+	for _, c := range root.children {
+		ch.Attached = append(ch.Attached, outlineNodeToTopics(c))
+	}
+	sheets = append(sheets, sh)
+	if err := xmind.WriteMap(absPath, sheets); err != nil {
+		return nil, fmt.Errorf("write map: %w", err)
+	}
+	n := countTopics(&sh.RootTopic)
+	return textResult(fmt.Sprintf("imported %d topics into new sheet id %s", n, sh.ID)), nil
+}
+
+func importOutlineAppend(absPath string, sheets []xmind.Sheet, sheetID, parentID string, pairs []outlinePair) (*mcp.CallToolResult, error) {
+	sh := findSheetByID(sheets, sheetID)
 	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetIDArg)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
 	}
-
 	var parent *xmind.Topic
-	if parentIDArg == "" {
+	if parentID == "" {
 		parent = &sh.RootTopic
 	} else {
-		parent = findTopicByID(&sh.RootTopic, parentIDArg)
+		parent = findTopicByID(&sh.RootTopic, parentID)
 		if parent == nil {
-			return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentIDArg)), nil
+			return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
 		}
 	}
-
 	forest := buildOutlineForest(pairs)
 	ch := ensureChildren(parent)
 	total := 0
-	for _, root := range forest {
-		t := outlineNodeToTopics(root)
+	for _, r := range forest {
+		t := outlineNodeToTopics(r)
 		ch.Attached = append(ch.Attached, t)
 		total += countTopics(&t)
 	}
@@ -217,32 +252,78 @@ func (h *XMindHandler) ImportFromOutline(ctx context.Context, req mcp.CallToolRe
 	return textResult(fmt.Sprintf("imported %d topics", total)), nil
 }
 
-func parseOutlineToPairs(outline string) []outlinePair {
-	lines := strings.Split(outline, "\n")
-	var firstNonEmpty string
-	var firstIdx int
+func firstNonEmptyLineIndex(lines []string) (idx int, ok bool) {
 	for i, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		firstNonEmpty = line
-		firstIdx = i
-		break
+		return i, true
 	}
-	if firstNonEmpty == "" {
-		return nil
-	}
+	return 0, false
+}
 
-	trimmedFirst := strings.TrimLeft(firstNonEmpty, " \t")
-	var mode string // heading, list, plain
+func detectOutlineMode(trimmedFirst string) string {
 	switch {
 	case strings.HasPrefix(trimmedFirst, "#"):
-		mode = "heading"
+		return "heading"
 	case strings.HasPrefix(trimmedFirst, "-") || strings.HasPrefix(trimmedFirst, "*"):
-		mode = "list"
+		return "list"
 	default:
-		mode = "plain"
+		return "plain"
 	}
+}
+
+func headingHashPrefixLen(s string) int {
+	n := 0
+	for n < len(s) && s[n] == '#' {
+		n++
+	}
+	return n
+}
+
+func appendOutlinePairHeading(line string, pairs *[]outlinePair) {
+	s := strings.TrimLeft(line, " \t")
+	if !strings.HasPrefix(s, "#") {
+		return
+	}
+	n := headingHashPrefixLen(s)
+	if n == 0 {
+		return
+	}
+	rest := strings.TrimSpace(s[n:])
+	*pairs = append(*pairs, outlinePair{depth: n - 1, title: rest})
+}
+
+func appendOutlinePairList(line string, pairs *[]outlinePair) {
+	lead := countLeadingSpaceTabs(line)
+	s := strings.TrimLeft(line, " \t")
+	var title string
+	switch {
+	case strings.HasPrefix(s, "- "):
+		title = strings.TrimSpace(s[2:])
+	case strings.HasPrefix(s, "* "):
+		title = strings.TrimSpace(s[2:])
+	case s == "-" || s == "*":
+		title = ""
+	default:
+		return
+	}
+	*pairs = append(*pairs, outlinePair{depth: lead / 2, title: title})
+}
+
+func appendOutlinePairPlain(line string, pairs *[]outlinePair) {
+	lead := countLeadingSpaceTabs(line)
+	title := strings.TrimSpace(line)
+	*pairs = append(*pairs, outlinePair{depth: lead / 2, title: title})
+}
+
+func parseOutlineToPairs(outline string) []outlinePair {
+	lines := strings.Split(outline, "\n")
+	firstIdx, ok := firstNonEmptyLineIndex(lines)
+	if !ok {
+		return nil
+	}
+	mode := detectOutlineMode(strings.TrimLeft(lines[firstIdx], " \t"))
 
 	var pairs []outlinePair
 	for _, line := range lines[firstIdx:] {
@@ -251,41 +332,11 @@ func parseOutlineToPairs(outline string) []outlinePair {
 		}
 		switch mode {
 		case "heading":
-			s := strings.TrimLeft(line, " \t")
-			if !strings.HasPrefix(s, "#") {
-				continue
-			}
-			n := 0
-			for n < len(s) && s[n] == '#' {
-				n++
-			}
-			if n == 0 {
-				continue
-			}
-			rest := strings.TrimSpace(s[n:])
-			pairs = append(pairs, outlinePair{depth: n - 1, title: rest})
+			appendOutlinePairHeading(line, &pairs)
 		case "list":
-			orig := line
-			lead := countLeadingSpaceTabs(orig)
-			s := strings.TrimLeft(orig, " \t")
-			var title string
-			switch {
-			case strings.HasPrefix(s, "- "):
-				title = strings.TrimSpace(s[2:])
-			case strings.HasPrefix(s, "* "):
-				title = strings.TrimSpace(s[2:])
-			case s == "-" || s == "*":
-				title = ""
-			default:
-				continue
-			}
-			depth := lead / 2
-			pairs = append(pairs, outlinePair{depth: depth, title: title})
+			appendOutlinePairList(line, &pairs)
 		case "plain":
-			lead := countLeadingSpaceTabs(line)
-			depth := lead / 2
-			title := strings.TrimSpace(line)
-			pairs = append(pairs, outlinePair{depth: depth, title: title})
+			appendOutlinePairPlain(line, &pairs)
 		}
 	}
 	return pairs
