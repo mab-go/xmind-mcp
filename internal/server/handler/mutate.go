@@ -87,6 +87,43 @@ func buildTopicsFromArgs(raw []any) ([]xmind.Topic, int, *mcp.CallToolResult, er
 	return out, total, nil, nil
 }
 
+func topicFromBulkArgMap(m map[string]any, index int, depth int, total *int) (xmind.Topic, *mcp.CallToolResult, error) {
+	titleVal, ok := m["title"]
+	if !ok {
+		return xmind.Topic{}, nil, fmt.Errorf("topics[%d]: missing title", index)
+	}
+	title, ok := titleVal.(string)
+	if !ok {
+		return xmind.Topic{}, nil, fmt.Errorf("topics[%d]: title must be a string", index)
+	}
+	if *total >= maxBulkTopicsTotal {
+		return xmind.Topic{}, nil, fmt.Errorf("maximum topic count is %d", maxBulkTopicsTotal)
+	}
+	topic := xmind.Topic{
+		ID:    uuid.New().String(),
+		Title: title,
+	}
+	*total++
+	if ch, has := m["children"]; has && ch != nil {
+		arr, ok := ch.([]any)
+		if !ok {
+			return xmind.Topic{}, nil, fmt.Errorf("topics[%d]: children must be an array", index)
+		}
+		children, toolErr, err := buildTopicsFromArgsDepth(arr, depth+1, total)
+		if toolErr != nil {
+			return xmind.Topic{}, toolErr, nil
+		}
+		if err != nil {
+			return xmind.Topic{}, nil, err
+		}
+		topic.Children = &xmind.Children{Attached: children}
+	}
+	if toolResult := applyTopicPropertiesArgs(m, &topic); toolResult != nil {
+		return xmind.Topic{}, toolResult, nil
+	}
+	return topic, nil, nil
+}
+
 func buildTopicsFromArgsDepth(raw []any, depth int, total *int) ([]xmind.Topic, *mcp.CallToolResult, error) {
 	if depth > maxBulkTopicsDepth {
 		return nil, nil, fmt.Errorf("maximum nesting depth is %d", maxBulkTopicsDepth)
@@ -97,38 +134,12 @@ func buildTopicsFromArgsDepth(raw []any, depth int, total *int) ([]xmind.Topic, 
 		if !ok {
 			return nil, nil, fmt.Errorf("topics[%d]: expected object", i)
 		}
-		titleVal, ok := m["title"]
-		if !ok {
-			return nil, nil, fmt.Errorf("topics[%d]: missing title", i)
+		topic, toolRes, err := topicFromBulkArgMap(m, i, depth, total)
+		if toolRes != nil {
+			return nil, toolRes, nil
 		}
-		title, ok := titleVal.(string)
-		if !ok {
-			return nil, nil, fmt.Errorf("topics[%d]: title must be a string", i)
-		}
-		if *total >= maxBulkTopicsTotal {
-			return nil, nil, fmt.Errorf("maximum topic count is %d", maxBulkTopicsTotal)
-		}
-		topic := xmind.Topic{
-			ID:    uuid.New().String(),
-			Title: title,
-		}
-		*total++
-		if ch, has := m["children"]; has && ch != nil {
-			arr, ok := ch.([]any)
-			if !ok {
-				return nil, nil, fmt.Errorf("topics[%d]: children must be an array", i)
-			}
-			children, toolErr, err := buildTopicsFromArgsDepth(arr, depth+1, total)
-			if toolErr != nil {
-				return nil, toolErr, nil
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			topic.Children = &xmind.Children{Attached: children}
-		}
-		if toolResult := applyTopicPropertiesArgs(m, &topic); toolResult != nil {
-			return nil, toolResult, nil
+		if err != nil {
+			return nil, nil, err
 		}
 		out = append(out, topic)
 	}
@@ -158,6 +169,38 @@ func parseSummaryRange(r string) (from, to int, ok bool) {
 
 func formatSummaryRange(from, to int) string {
 	return fmt.Sprintf("(%d,%d)", from, to)
+}
+
+func validateAddSummary(parent *xmind.Topic, fromIdx, toIdx int) *mcp.CallToolResult {
+	if parent.Children == nil || len(parent.Children.Attached) == 0 {
+		return mcp.NewToolResultError("parent has no attached children to summarize")
+	}
+	n := len(parent.Children.Attached)
+	if fromIdx > toIdx {
+		return mcp.NewToolResultError("invalid summary range: from_index must be <= to_index")
+	}
+	if toIdx >= n {
+		return mcp.NewToolResultError(fmt.Sprintf("to_index %d is out of range for %d attached children", toIdx, n))
+	}
+	return nil
+}
+
+// applyAddSummary appends the summary topic and range descriptor (double-write per XMind schema).
+func applyAddSummary(parent *xmind.Topic, fromIdx, toIdx int, title string) string {
+	summaryTopicID := uuid.New().String()
+	summaryRowID := uuid.New().String()
+	summaryTopic := xmind.Topic{
+		ID:    summaryTopicID,
+		Title: title,
+	}
+	ch := ensureChildren(parent)
+	ch.Summary = append(ch.Summary, summaryTopic)
+	parent.Summaries = append(parent.Summaries, xmind.Summary{
+		ID:      summaryRowID,
+		Range:   formatSummaryRange(fromIdx, toIdx),
+		TopicID: summaryTopicID,
+	})
+	return summaryTopicID
 }
 
 // shiftSummaryRangesAfterRemove returns updated summary descriptors and topic IDs whose summary
@@ -321,6 +364,23 @@ func insertAttached(parent *xmind.Topic, topic xmind.Topic, pos *int) *mcp.CallT
 	return nil
 }
 
+// insertAttachedWithSummaryAdjust runs insertAttached, derives the insert index, and adjusts
+// existing summary ranges when the parent has summaries.
+func insertAttachedWithSummaryAdjust(parent *xmind.Topic, topic xmind.Topic, pos *int) (insertIdx int, toolErr *mcp.CallToolResult) {
+	if terr := insertAttached(parent, topic, pos); terr != nil {
+		return 0, terr
+	}
+	if pos == nil {
+		insertIdx = len(parent.Children.Attached) - 1
+	} else {
+		insertIdx = *pos
+	}
+	if len(parent.Summaries) > 0 {
+		adjustSummariesAfterAttachedInsert(parent, insertIdx)
+	}
+	return insertIdx, nil
+}
+
 func removeAttachedChild(parent *xmind.Topic, idx int) (*xmind.Topic, *mcp.CallToolResult) {
 	if idx < 0 || idx >= len(parent.Children.Attached) {
 		return nil, mcp.NewToolResultError("internal error: attached child index out of range")
@@ -385,37 +445,22 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 	if toolErr != nil {
 		return toolErr, nil
 	}
-	sheetID, terr := requireString(args, "sheet_id")
+	parts, terr := requireMapStrings(args, []string{"sheet_id", "parent_id", "title"})
 	if terr != nil {
 		return terr, nil
 	}
-	parentID, terr := requireString(args, "parent_id")
-	if terr != nil {
-		return terr, nil
-	}
-	title, terr := requireString(args, "title")
-	if terr != nil {
-		return terr, nil
-	}
+	sheetID, parentID, title := parts[0], parts[1], parts[2]
 	pos, perr := parsePositionOptional(args["position"])
 	if perr != nil {
 		return perr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, sh, parent, mapErr, err := loadSheetAndParentTopic(absPath, sheetID, parentID)
 	if err != nil {
 		return nil, err
 	}
-	if toolErr2 != nil {
-		return toolErr2, nil
-	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	parent := findTopicByID(&sh.RootTopic, parentID)
-	if parent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
+	if mapErr != nil {
+		return mapErr, nil
 	}
 
 	topic := xmind.Topic{
@@ -425,17 +470,9 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 	if toolResult := applyTopicPropertiesArgs(args, &topic); toolResult != nil {
 		return toolResult, nil
 	}
-	if terr := insertAttached(parent, topic, pos); terr != nil {
+	insertIdx, terr := insertAttachedWithSummaryAdjust(parent, topic, pos)
+	if terr != nil {
 		return terr, nil
-	}
-	insertIdx := 0
-	if pos == nil {
-		insertIdx = len(parent.Children.Attached) - 1
-	} else {
-		insertIdx = *pos
-	}
-	if len(parent.Summaries) > 0 {
-		adjustSummariesAfterAttachedInsert(parent, insertIdx)
 	}
 	sh.RevisionID = uuid.New().String()
 	if err := xmind.WriteMap(absPath, sheets); err != nil {
@@ -456,41 +493,26 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 	if toolErr != nil {
 		return toolErr, nil
 	}
-	sheetID, terr := requireString(args, "sheet_id")
+	parts, terr := requireMapStrings(args, []string{"sheet_id", "topic_id", "target_parent_id"})
 	if terr != nil {
 		return terr, nil
 	}
-	topicID, terr := requireString(args, "topic_id")
-	if terr != nil {
-		return terr, nil
-	}
-	targetParentID, terr := requireString(args, "target_parent_id")
-	if terr != nil {
-		return terr, nil
-	}
+	sheetID, topicID, targetParentID := parts[0], parts[1], parts[2]
 	pos, perr := parsePositionOptional(args["position"])
 	if perr != nil {
 		return perr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, sh, tErr, err := loadSheetByID(absPath, sheetID)
 	if err != nil {
 		return nil, err
 	}
-	if toolErr2 != nil {
-		return toolErr2, nil
+	if tErr != nil {
+		return tErr, nil
 	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	source := findTopicByID(&sh.RootTopic, topicID)
-	if source == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("source topic not found: %s", topicID)), nil
-	}
-	targetParent := findTopicByID(&sh.RootTopic, targetParentID)
-	if targetParent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("target parent not found: %s", targetParentID)), nil
+	source, targetParent, rerr := resolveDuplicateTopicPair(&sh.RootTopic, topicID, targetParentID)
+	if rerr != nil {
+		return rerr, nil
 	}
 
 	clone, err := deepCloneTopic(source)
@@ -500,17 +522,9 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 	newRootID := clone.ID
 	n := countTopics(&clone)
 
-	if terr := insertAttached(targetParent, clone, pos); terr != nil {
+	insertIdx, terr := insertAttachedWithSummaryAdjust(targetParent, clone, pos)
+	if terr != nil {
 		return terr, nil
-	}
-	insertIdx := 0
-	if pos == nil {
-		insertIdx = len(targetParent.Children.Attached) - 1
-	} else {
-		insertIdx = *pos
-	}
-	if len(targetParent.Summaries) > 0 {
-		adjustSummariesAfterAttachedInsert(targetParent, insertIdx)
 	}
 	sh.RevisionID = uuid.New().String()
 	if err := xmind.WriteMap(absPath, sheets); err != nil {
@@ -534,17 +548,14 @@ func (h *XMindHandler) AddTopicsBulk(ctx context.Context, req mcp.CallToolReques
 	if toolErr != nil {
 		return toolErr, nil
 	}
-	sheetID, terr := requireString(args, "sheet_id")
+	parts, terr := requireMapStrings(args, []string{"sheet_id", "parent_id"})
 	if terr != nil {
 		return terr, nil
 	}
-	parentID, terr := requireString(args, "parent_id")
-	if terr != nil {
-		return terr, nil
-	}
-	rawTopics, ok := args["topics"].([]any)
-	if !ok || rawTopics == nil {
-		return mcp.NewToolResultError("missing or invalid argument: topics (expected array)"), nil
+	sheetID, parentID := parts[0], parts[1]
+	rawTopics, aerr := parseBulkTopicsArray(args)
+	if aerr != nil {
+		return aerr, nil
 	}
 
 	topics, count, topicsToolErr, perr := buildTopicsFromArgs(rawTopics)
@@ -555,20 +566,12 @@ func (h *XMindHandler) AddTopicsBulk(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError("invalid argument topics: " + perr.Error()), nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, sh, parent, mapErr, err := loadSheetAndParentTopic(absPath, sheetID, parentID)
 	if err != nil {
 		return nil, err
 	}
-	if toolErr2 != nil {
-		return toolErr2, nil
-	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	parent := findTopicByID(&sh.RootTopic, parentID)
-	if parent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
+	if mapErr != nil {
+		return mapErr, nil
 	}
 
 	ch := ensureChildren(parent)
@@ -1176,6 +1179,70 @@ func loadSheetByID(absPath, sheetID string) ([]xmind.Sheet, *xmind.Sheet, *mcp.C
 	return sheets, sh, nil, nil
 }
 
+// loadSheetAndParentTopic loads the map and resolves parentID under the sheet root.
+func loadSheetAndParentTopic(absPath, sheetID, parentID string) ([]xmind.Sheet, *xmind.Sheet, *xmind.Topic, *mcp.CallToolResult, error) {
+	sheets, sh, tErr, err := loadSheetByID(absPath, sheetID)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if tErr != nil {
+		return nil, nil, nil, tErr, nil
+	}
+	parent := findTopicByID(&sh.RootTopic, parentID)
+	if parent == nil {
+		return sheets, sh, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
+	}
+	return sheets, sh, parent, nil, nil
+}
+
+func parseBulkTopicsArray(args map[string]any) ([]any, *mcp.CallToolResult) {
+	rawTopics, ok := args["topics"].([]any)
+	if !ok || rawTopics == nil {
+		return nil, mcp.NewToolResultError("missing or invalid argument: topics (expected array)")
+	}
+	return rawTopics, nil
+}
+
+func requireRelationshipEndpoints(root *xmind.Topic, fromID, toID string) *mcp.CallToolResult {
+	if findTopicByID(root, fromID) == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", fromID))
+	}
+	if findTopicByID(root, toID) == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", toID))
+	}
+	return nil
+}
+
+func appendRelationship(sh *xmind.Sheet, fromID, toID, label string) string {
+	relID := uuid.New().String()
+	sh.Relationships = append(sh.Relationships, xmind.Relationship{
+		ID:     relID,
+		End1ID: fromID,
+		End2ID: toID,
+		Title:  label,
+	})
+	return relID
+}
+
+func validateParentHasAttachedForBoundary(parent *xmind.Topic) *mcp.CallToolResult {
+	if parent.Children == nil || len(parent.Children.Attached) == 0 {
+		return mcp.NewToolResultError("parent has no attached children for a boundary")
+	}
+	return nil
+}
+
+func resolveDuplicateTopicPair(root *xmind.Topic, topicID, targetParentID string) (*xmind.Topic, *xmind.Topic, *mcp.CallToolResult) {
+	source := findTopicByID(root, topicID)
+	if source == nil {
+		return nil, nil, mcp.NewToolResultError(fmt.Sprintf("source topic not found: %s", topicID))
+	}
+	targetParent := findTopicByID(root, targetParentID)
+	if targetParent == nil {
+		return nil, nil, mcp.NewToolResultError(fmt.Sprintf("target parent not found: %s", targetParentID))
+	}
+	return source, targetParent, nil
+}
+
 func applyTopicPropertiesToTopics(args map[string]any, topics []*xmind.Topic) *mcp.CallToolResult {
 	for _, topic := range topics {
 		if r := applyTopicPropertiesArgs(args, topic); r != nil {
@@ -1342,41 +1409,23 @@ func (h *XMindHandler) AddRelationship(ctx context.Context, req mcp.CallToolRequ
 	if terr != nil {
 		return terr, nil
 	}
-	var label string
-	if v, has := args["label"]; has && v != nil {
-		s, ok := v.(string)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument label: expected a string"), nil
-		}
-		label = s
+	label, oerr := optionalStringArg(args, "label")
+	if oerr != nil {
+		return oerr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, sh, tErr, err := loadSheetByID(absPath, sheetID)
 	if err != nil {
 		return nil, err
 	}
-	if toolErr2 != nil {
-		return toolErr2, nil
+	if tErr != nil {
+		return tErr, nil
 	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	if findTopicByID(&sh.RootTopic, fromID) == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", fromID)), nil
-	}
-	if findTopicByID(&sh.RootTopic, toID) == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", toID)), nil
+	if e := requireRelationshipEndpoints(&sh.RootTopic, fromID, toID); e != nil {
+		return e, nil
 	}
 
-	relID := uuid.New().String()
-	rel := xmind.Relationship{
-		ID:     relID,
-		End1ID: fromID,
-		End2ID: toID,
-		Title:  label,
-	}
-	sh.Relationships = append(sh.Relationships, rel)
+	relID := appendRelationship(sh, fromID, toID, label)
 	sh.RevisionID = uuid.New().String()
 	if err := xmind.WriteMap(absPath, sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
@@ -1433,14 +1482,11 @@ func (h *XMindHandler) AddSummary(ctx context.Context, req mcp.CallToolRequest) 
 	if toolErr != nil {
 		return toolErr, nil
 	}
-	sheetID, terr := requireString(args, "sheet_id")
+	parts, terr := requireMapStrings(args, []string{"sheet_id", "parent_id"})
 	if terr != nil {
 		return terr, nil
 	}
-	parentID, terr := requireString(args, "parent_id")
-	if terr != nil {
-		return terr, nil
-	}
+	sheetID, parentID := parts[0], parts[1]
 	fromIdx, terr := requireNonNegativeInt(args, "from_index")
 	if terr != nil {
 		return terr, nil
@@ -1449,54 +1495,23 @@ func (h *XMindHandler) AddSummary(ctx context.Context, req mcp.CallToolRequest) 
 	if terr != nil {
 		return terr, nil
 	}
-	var title string
-	if v, has := args["title"]; has && v != nil {
-		s, ok := v.(string)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument title: expected a string"), nil
-		}
-		title = s
+	title, oerr := optionalStringArg(args, "title")
+	if oerr != nil {
+		return oerr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, sh, parent, mapErr, err := loadSheetAndParentTopic(absPath, sheetID, parentID)
 	if err != nil {
 		return nil, err
 	}
-	if toolErr2 != nil {
-		return toolErr2, nil
+	if mapErr != nil {
+		return mapErr, nil
 	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	parent := findTopicByID(&sh.RootTopic, parentID)
-	if parent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
-	}
-	if parent.Children == nil || len(parent.Children.Attached) == 0 {
-		return mcp.NewToolResultError("parent has no attached children to summarize"), nil
-	}
-	n := len(parent.Children.Attached)
-	if fromIdx > toIdx {
-		return mcp.NewToolResultError("invalid summary range: from_index must be <= to_index"), nil
-	}
-	if toIdx >= n {
-		return mcp.NewToolResultError(fmt.Sprintf("to_index %d is out of range for %d attached children", toIdx, n)), nil
+	if verr := validateAddSummary(parent, fromIdx, toIdx); verr != nil {
+		return verr, nil
 	}
 
-	summaryTopicID := uuid.New().String()
-	summaryRowID := uuid.New().String()
-	summaryTopic := xmind.Topic{
-		ID:    summaryTopicID,
-		Title: title,
-	}
-	ch := ensureChildren(parent)
-	ch.Summary = append(ch.Summary, summaryTopic)
-	parent.Summaries = append(parent.Summaries, xmind.Summary{
-		ID:      summaryRowID,
-		Range:   formatSummaryRange(fromIdx, toIdx),
-		TopicID: summaryTopicID,
-	})
+	summaryTopicID := applyAddSummary(parent, fromIdx, toIdx, title)
 
 	sh.RevisionID = uuid.New().String()
 	if err := xmind.WriteMap(absPath, sheets); err != nil {
@@ -1521,32 +1536,20 @@ func (h *XMindHandler) AddBoundary(ctx context.Context, req mcp.CallToolRequest)
 	if terr != nil {
 		return terr, nil
 	}
-	var title string
-	if v, has := args["title"]; has && v != nil {
-		s, ok := v.(string)
-		if !ok {
-			return mcp.NewToolResultError("invalid argument title: expected a string"), nil
-		}
-		title = s
+	title, oerr := optionalStringArg(args, "title")
+	if oerr != nil {
+		return oerr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, sh, parent, mapErr, err := loadSheetAndParentTopic(absPath, sheetID, parentID)
 	if err != nil {
 		return nil, err
 	}
-	if toolErr2 != nil {
-		return toolErr2, nil
+	if mapErr != nil {
+		return mapErr, nil
 	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	parent := findTopicByID(&sh.RootTopic, parentID)
-	if parent == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
-	}
-	if parent.Children == nil || len(parent.Children.Attached) == 0 {
-		return mcp.NewToolResultError("parent has no attached children for a boundary"), nil
+	if verr := validateParentHasAttachedForBoundary(parent); verr != nil {
+		return verr, nil
 	}
 
 	boundaryID := uuid.New().String()
@@ -1562,6 +1565,19 @@ func (h *XMindHandler) AddBoundary(ctx context.Context, req mcp.CallToolRequest)
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("added boundary id %s", boundaryID)), nil
+}
+
+// optionalStringArg returns ("", nil) when key is absent or null; on wrong type returns a tool error.
+func optionalStringArg(args map[string]any, key string) (string, *mcp.CallToolResult) {
+	v, has := args[key]
+	if !has || v == nil {
+		return "", nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", mcp.NewToolResultError(fmt.Sprintf("invalid argument %s: expected a string", key))
+	}
+	return s, nil
 }
 
 func requireNonNegativeInt(args map[string]any, key string) (int, *mcp.CallToolResult) {
@@ -1603,4 +1619,17 @@ func requireString(args map[string]any, key string) (string, *mcp.CallToolResult
 		return "", mcp.NewToolResultError("invalid argument " + key + ": expected a non-empty string")
 	}
 	return s, nil
+}
+
+// requireMapStrings returns requireString values for keys in order.
+func requireMapStrings(args map[string]any, keys []string) ([]string, *mcp.CallToolResult) {
+	out := make([]string, len(keys))
+	for i, k := range keys {
+		s, err := requireString(args, k)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = s
+	}
+	return out, nil
 }
