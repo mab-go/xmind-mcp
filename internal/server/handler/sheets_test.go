@@ -55,6 +55,41 @@ func TestListSheetsKitchenSink(t *testing.T) {
 	}
 }
 
+func assertReadMapOneSheetTitles(t *testing.T, path, wantSheetTitle, wantRootTitle string) {
+	t.Helper()
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatalf("ReadMap: %v", err)
+	}
+	if len(sheets) != 1 {
+		t.Fatalf("sheet count: got %d want 1", len(sheets))
+	}
+	if got, want := sheets[0].Title, wantSheetTitle; got != want {
+		t.Fatalf("sheet title: got %q want %q", got, want)
+	}
+	if got, want := sheets[0].RootTopic.Title, wantRootTitle; got != want {
+		t.Fatalf("root title: got %q want %q", got, want)
+	}
+}
+
+func assertOpenMapListsOneSheet(t *testing.T, h *XMindHandler, path, wantSheetTitle, wantRootTitle string) {
+	t.Helper()
+	openRes := callTool(t, h.OpenMap, map[string]any{"path": path})
+	if openRes.IsError {
+		t.Fatalf("OpenMap after CreateMap: %s", textContent(t, openRes))
+	}
+	var om openMapResponse
+	if err := json.Unmarshal([]byte(textContent(t, openRes)), &om); err != nil {
+		t.Fatalf("OpenMap unmarshal: %v", err)
+	}
+	if om.SheetCount != 1 {
+		t.Fatalf("OpenMap sheetCount: got %d want 1", om.SheetCount)
+	}
+	if len(om.Sheets) != 1 || om.Sheets[0].Title != wantSheetTitle || om.Sheets[0].RootTopicTitle != wantRootTitle {
+		t.Fatalf("OpenMap sheets: %+v", om.Sheets)
+	}
+}
+
 func TestCreateMapOpenRead(t *testing.T) {
 	h := NewXMindHandler()
 	dir := t.TempDir()
@@ -67,34 +102,8 @@ func TestCreateMapOpenRead(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("CreateMap: %s", textContent(t, res))
 	}
-	sheets, err := xmind.ReadMap(path)
-	if err != nil {
-		t.Fatalf("ReadMap: %v", err)
-	}
-	if len(sheets) != 1 {
-		t.Fatalf("sheet count: got %d want 1", len(sheets))
-	}
-	if got, want := sheets[0].Title, "My Sheet"; got != want {
-		t.Fatalf("sheet title: got %q want %q", got, want)
-	}
-	if got, want := sheets[0].RootTopic.Title, "Root A"; got != want {
-		t.Fatalf("root title: got %q want %q", got, want)
-	}
-
-	openRes := callTool(t, h.OpenMap, map[string]any{"path": path})
-	if openRes.IsError {
-		t.Fatalf("OpenMap after CreateMap: %s", textContent(t, openRes))
-	}
-	var om openMapResponse
-	if err := json.Unmarshal([]byte(textContent(t, openRes)), &om); err != nil {
-		t.Fatalf("OpenMap unmarshal: %v", err)
-	}
-	if om.SheetCount != 1 {
-		t.Fatalf("OpenMap sheetCount: got %d want 1", om.SheetCount)
-	}
-	if len(om.Sheets) != 1 || om.Sheets[0].Title != "My Sheet" || om.Sheets[0].RootTopicTitle != "Root A" {
-		t.Fatalf("OpenMap sheets: %+v", om.Sheets)
-	}
+	assertReadMapOneSheetTitles(t, path, "My Sheet", "Root A")
+	assertOpenMapListsOneSheet(t, h, path, "My Sheet", "Root A")
 }
 
 func TestCreateMapFileExists(t *testing.T) {
@@ -254,11 +263,10 @@ func TestDeleteLastSheetError(t *testing.T) {
 	}
 }
 
-func TestListRelationshipsKitchenSink(t *testing.T) {
-	h := NewXMindHandler()
+func mustListRelationshipsJSON(t *testing.T, h *XMindHandler, path, sheetID string) listRelationshipsResponse {
+	t.Helper()
 	res := callTool(t, h.ListRelationships, map[string]any{
-		"path":     kitchenSinkPath(t),
-		"sheet_id": kitchenSinkRelationshipsSheetID,
+		"path": path, "sheet_id": sheetID,
 	})
 	if res.IsError {
 		t.Fatalf("unexpected tool error: %s", textContent(t, res))
@@ -267,40 +275,49 @@ func TestListRelationshipsKitchenSink(t *testing.T) {
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out.SheetID != kitchenSinkRelationshipsSheetID {
-		t.Fatalf("sheetId: got %q want %q", out.SheetID, kitchenSinkRelationshipsSheetID)
+	return out
+}
+
+func assertKitchenSinkRelationshipListHeader(t *testing.T, out *listRelationshipsResponse, wantSheetID string, wantRelCount int) {
+	t.Helper()
+	if out.SheetID != wantSheetID {
+		t.Fatalf("sheetId: got %q want %q", out.SheetID, wantSheetID)
 	}
-	const wantRelCount = 2 // kitchen-sink Sheet 12 (kitchenSinkRelationshipsSheetID)
 	if out.RelationshipCount != wantRelCount || len(out.Relationships) != wantRelCount {
 		t.Fatalf("relationshipCount/relationships: got count=%d len=%d want %d", out.RelationshipCount, len(out.Relationships), wantRelCount)
 	}
 	if len(out.Relationships) != out.RelationshipCount {
 		t.Fatalf("relationships len %d vs relationshipCount %d", len(out.Relationships), out.RelationshipCount)
 	}
-	foundNonEmpty := false
-	for _, r := range out.Relationships {
+}
+
+func assertSomeRelationshipHasEndTitles(t *testing.T, rels []listRelationshipsItem) {
+	t.Helper()
+	for _, r := range rels {
 		if r.End1Title != "" && r.End2Title != "" {
-			foundNonEmpty = true
-			break
+			return
 		}
 	}
-	if !foundNonEmpty {
-		t.Fatal("expected at least one relationship with non-empty end1Title and end2Title")
-	}
-	sheets, err := xmind.ReadMap(kitchenSinkPath(t))
+	t.Fatal("expected at least one relationship with non-empty end1Title and end2Title")
+}
+
+func findKitchenSinkSheetByID(t *testing.T, path, sheetID string) *xmind.Sheet {
+	t.Helper()
+	sheets, err := xmind.ReadMap(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sh *xmind.Sheet
 	for i := range sheets {
-		if sheets[i].ID == kitchenSinkRelationshipsSheetID {
-			sh = &sheets[i]
-			break
+		if sheets[i].ID == sheetID {
+			return &sheets[i]
 		}
 	}
-	if sh == nil {
-		t.Fatal("sheet not found in kitchen sink")
-	}
+	t.Fatal("sheet not found in kitchen sink")
+	return nil
+}
+
+func assertFirstRelationshipMatchesSheet(t *testing.T, sh *xmind.Sheet, out *listRelationshipsResponse) {
+	t.Helper()
 	if len(sh.Relationships) != len(out.Relationships) {
 		t.Fatalf("ReadMap rel count %d vs list %d", len(sh.Relationships), len(out.Relationships))
 	}
@@ -318,6 +335,17 @@ func TestListRelationshipsKitchenSink(t *testing.T) {
 	if got.End1ID != sh.Relationships[0].End1ID || got.End2ID != sh.Relationships[0].End2ID {
 		t.Fatalf("endpoint ids: got %+v want End1=%q End2=%q", got, sh.Relationships[0].End1ID, sh.Relationships[0].End2ID)
 	}
+}
+
+func TestListRelationshipsKitchenSink(t *testing.T) {
+	h := NewXMindHandler()
+	path := kitchenSinkPath(t)
+	out := mustListRelationshipsJSON(t, h, path, kitchenSinkRelationshipsSheetID)
+	const wantRelCount = 2
+	assertKitchenSinkRelationshipListHeader(t, &out, kitchenSinkRelationshipsSheetID, wantRelCount)
+	assertSomeRelationshipHasEndTitles(t, out.Relationships)
+	sh := findKitchenSinkSheetByID(t, path, kitchenSinkRelationshipsSheetID)
+	assertFirstRelationshipMatchesSheet(t, sh, &out)
 }
 
 func TestListRelationshipsEmptySheet(t *testing.T) {

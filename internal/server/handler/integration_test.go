@@ -9,6 +9,15 @@ import (
 	"github.com/mab-go/xmind-mcp/internal/xmind"
 )
 
+func matchIDForTitle(matches []searchTopicItem, title string) string {
+	for i := range matches {
+		if matches[i].Title == title {
+			return matches[i].ID
+		}
+	}
+	return ""
+}
+
 func TestIntegration_FindThenMutate(t *testing.T) {
 	h := NewXMindHandler()
 	path := copyFixture(t, kitchenSinkPath(t))
@@ -27,13 +36,7 @@ func TestIntegration_FindThenMutate(t *testing.T) {
 	if err := json.Unmarshal([]byte(textContent(t, res)), &st); err != nil {
 		t.Fatal(err)
 	}
-	var alphaID string
-	for i := range st.Matches {
-		if st.Matches[i].Title == "Alpha" {
-			alphaID = st.Matches[i].ID
-			break
-		}
-	}
+	alphaID := matchIDForTitle(st.Matches, "Alpha")
 	if alphaID == "" {
 		t.Fatal("Alpha not found")
 	}
@@ -56,6 +59,30 @@ func TestIntegration_FindThenMutate(t *testing.T) {
 	})
 	if findRes.IsError {
 		t.Fatal(textContent(t, findRes))
+	}
+}
+
+func attachedIDsByTitle(root *xmind.Topic, titles ...string) map[string]string {
+	out := make(map[string]string)
+	if root.Children == nil {
+		return out
+	}
+	for _, ch := range root.Children.Attached {
+		for _, want := range titles {
+			if ch.Title == want {
+				out[want] = ch.ID
+			}
+		}
+	}
+	return out
+}
+
+func assertOutlineContainsAll(t *testing.T, outline string, parts []string) {
+	t.Helper()
+	for _, s := range parts {
+		if !strings.Contains(outline, s) {
+			t.Fatalf("outline missing %q:\n%s", s, outline)
+		}
 	}
 }
 
@@ -88,20 +115,12 @@ func TestIntegration_BuildFromScratch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var idOne, idTwo string
-	for _, ch := range sheets[0].RootTopic.Children.Attached {
-		switch ch.Title {
-		case "One":
-			idOne = ch.ID
-		case "Two":
-			idTwo = ch.ID
-		}
-	}
-	if idOne == "" || idTwo == "" {
+	ids := attachedIDsByTitle(&sheets[0].RootTopic, "One", "Two")
+	if ids["One"] == "" || ids["Two"] == "" {
 		t.Fatalf("could not find One/Two: %+v", sheets[0].RootTopic.Children)
 	}
 	res := callTool(t, h.AddRelationship, map[string]any{
-		"path": path, "sheet_id": sid, "from_id": idOne, "to_id": idTwo, "label": "relates",
+		"path": path, "sheet_id": sid, "from_id": ids["One"], "to_id": ids["Two"], "label": "relates",
 	})
 	if res.IsError {
 		t.Fatal(textContent(t, res))
@@ -113,17 +132,30 @@ func TestIntegration_BuildFromScratch(t *testing.T) {
 		t.Fatal(textContent(t, flatRes))
 	}
 	out := textContent(t, flatRes)
-	for _, s := range []string{"Root", "One", "Two", "Three", "BulkRoot", "BulkChild"} {
-		if !strings.Contains(out, s) {
-			t.Fatalf("outline missing %q:\n%s", s, out)
-		}
-	}
+	assertOutlineContainsAll(t, out, []string{"Root", "One", "Two", "Three", "BulkRoot", "BulkChild"})
 	sheets, err = xmind.ReadMap(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(sheets[0].Relationships) < 1 {
 		t.Fatalf("expected relationship, got %+v", sheets[0].Relationships)
+	}
+}
+
+func sheetRootTitles(sheets []xmind.Sheet) []string {
+	out := make([]string, len(sheets))
+	for i := range sheets {
+		out[i] = sheets[i].RootTopic.Title
+	}
+	return out
+}
+
+func assertSheets1To14RootsUnchanged(t *testing.T, sheetsAfter []xmind.Sheet, wantRoots []string) {
+	t.Helper()
+	for i := 1; i < 15; i++ {
+		if got := sheetsAfter[i].RootTopic.Title; got != wantRoots[i] {
+			t.Fatalf("sheet %d root title changed: got %q want %q", i, got, wantRoots[i])
+		}
 	}
 }
 
@@ -137,10 +169,7 @@ func TestIntegration_KitchenSinkPreservation(t *testing.T) {
 	if len(sheetsBefore) != 15 {
 		t.Fatalf("want 15 sheets, got %d", len(sheetsBefore))
 	}
-	wantRoots := make([]string, 15)
-	for i := range sheetsBefore {
-		wantRoots[i] = sheetsBefore[i].RootTopic.Title
-	}
+	wantRoots := sheetRootTitles(sheetsBefore)
 	sid := sheetsBefore[0].ID
 	res := callTool(t, h.RenameTopic, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": kitchenSinkAlphaTopicID, "title": "AlphaTouched",
@@ -155,14 +184,26 @@ func TestIntegration_KitchenSinkPreservation(t *testing.T) {
 	if len(sheetsAfter) != 15 {
 		t.Fatalf("want 15 sheets after mutation, got %d", len(sheetsAfter))
 	}
-	for i := 1; i < 15; i++ {
-		if got := sheetsAfter[i].RootTopic.Title; got != wantRoots[i] {
-			t.Fatalf("sheet %d root title changed: got %q want %q", i, got, wantRoots[i])
-		}
-	}
+	assertSheets1To14RootsUnchanged(t, sheetsAfter, wantRoots)
 	topic := findTopicByID(&sheetsAfter[0].RootTopic, kitchenSinkAlphaTopicID)
 	if topic == nil || topic.Title != "AlphaTouched" {
 		t.Fatalf("expected mutation on sheet 0 only: %+v", topic)
+	}
+}
+
+func assertTopicTitleNotesLabels(t *testing.T, topic *xmind.Topic, wantTitle, wantNote string) {
+	t.Helper()
+	if topic == nil {
+		t.Fatal("topic missing")
+	}
+	if topic.Title != wantTitle {
+		t.Fatalf("title: got %q", topic.Title)
+	}
+	if topic.Notes == nil || topic.Notes.Plain == nil || topic.Notes.Plain.Content != wantNote {
+		t.Fatalf("notes: %+v", topic.Notes)
+	}
+	if len(topic.Labels) != 2 || topic.Labels[0] != "🏷️" {
+		t.Fatalf("labels: %v", topic.Labels)
 	}
 }
 
@@ -198,18 +239,7 @@ func TestEdgeCase_UnicodeContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	topic := findTopicByID(&sheets[0].RootTopic, tid)
-	if topic == nil {
-		t.Fatal("topic missing")
-	}
-	if topic.Title != title {
-		t.Fatalf("title: got %q", topic.Title)
-	}
-	if topic.Notes == nil || topic.Notes.Plain == nil || topic.Notes.Plain.Content != note {
-		t.Fatalf("notes: %+v", topic.Notes)
-	}
-	if len(topic.Labels) != 2 || topic.Labels[0] != "🏷️" {
-		t.Fatalf("labels: %v", topic.Labels)
-	}
+	assertTopicTitleNotesLabels(t, topic, title, note)
 }
 
 func TestEdgeCase_FloatingOnlySheet(t *testing.T) {

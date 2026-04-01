@@ -52,6 +52,302 @@ func parseMoveTopicResult(t *testing.T, res *mcp.CallToolResult) moveTopicRespon
 	return out
 }
 
+func parseDuplicateTopicResult(t *testing.T, res *mcp.CallToolResult) duplicateTopicResponse {
+	t.Helper()
+	if res.IsError {
+		t.Fatalf("expected success, got tool error: %s", textContent(t, res))
+	}
+	var out duplicateTopicResponse
+	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
+		t.Fatalf("parse duplicate topic JSON: %v", err)
+	}
+	return out
+}
+
+func readZipContentJSON(t *testing.T, path string) []byte {
+	t.Helper()
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = zr.Close() }()
+	for _, f := range zr.File {
+		if f.Name != "content.json" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	t.Fatal("content.json not found in zip")
+	return nil
+}
+
+func assertNestedBulkL1L2L3(t *testing.T, rt *xmind.Topic, bulk addTopicsBulkResponse, rootID string) {
+	t.Helper()
+	if bulk.ParentID != rootID {
+		t.Fatalf("unexpected parentId: got %q want %q", bulk.ParentID, rootID)
+	}
+	if rt.Children == nil || len(rt.Children.Attached) != 1 {
+		t.Fatal("expected one top-level branch")
+	}
+	l1 := &rt.Children.Attached[0]
+	if bulk.RootTopicIDs[0] != l1.ID {
+		t.Fatalf("rootTopicIds[0] %q != L1 id %q", bulk.RootTopicIDs[0], l1.ID)
+	}
+	assertTopicTitleOneChild(t, l1, "L1", "L2")
+	l2 := &l1.Children.Attached[0]
+	assertTopicTitleOneChild(t, l2, "L2", "L3")
+	l3 := &l2.Children.Attached[0]
+	if l3.Title != "L3" {
+		t.Fatalf("L3: %+v", l3)
+	}
+}
+
+func assertTopicTitleOneChild(t *testing.T, topic *xmind.Topic, wantTitle, childTitle string) {
+	t.Helper()
+	if topic.Title != wantTitle {
+		t.Fatalf("want title %q, got %+v", wantTitle, topic)
+	}
+	if topic.Children == nil || len(topic.Children.Attached) != 1 {
+		t.Fatalf("%s: want one child, got %+v", wantTitle, topic.Children)
+	}
+	if topic.Children.Attached[0].Title != childTitle {
+		t.Fatalf("%s: want child %q, got %+v", wantTitle, childTitle, topic.Children.Attached[0])
+	}
+}
+
+func assertTopicInlineMetadata(t *testing.T, topic *xmind.Topic, wantTitle, wantNote, wantLink string) {
+	t.Helper()
+	if topic == nil {
+		t.Fatal("topic not found after add")
+	}
+	if topic.Title != wantTitle {
+		t.Fatalf("title: got %q", topic.Title)
+	}
+	assertTopicNotesPlainAndHTML(t, topic, wantNote)
+	assertTopicLabelsAB(t, topic)
+	assertTopicMarkersPriorityDone(t, topic)
+	if topic.Href != wantLink {
+		t.Fatalf("href: got %q want %q", topic.Href, wantLink)
+	}
+}
+
+func assertTopicNotesPlainAndHTML(t *testing.T, topic *xmind.Topic, wantNote string) {
+	t.Helper()
+	if topic.Notes == nil || topic.Notes.Plain == nil || topic.Notes.Plain.Content != wantNote {
+		t.Fatalf("notes plain: %+v", topic.Notes)
+	}
+	if topic.Notes.RealHTML == nil || topic.Notes.RealHTML.Content == "" {
+		t.Fatalf("notes realHTML missing: %+v", topic.Notes)
+	}
+}
+
+func assertTopicLabelsAB(t *testing.T, topic *xmind.Topic) {
+	t.Helper()
+	if len(topic.Labels) != 2 || topic.Labels[0] != "a" || topic.Labels[1] != "b" {
+		t.Fatalf("labels: %+v", topic.Labels)
+	}
+}
+
+func assertTopicMarkersPriorityDone(t *testing.T, topic *xmind.Topic) {
+	t.Helper()
+	if len(topic.Markers) != 2 || topic.Markers[0].MarkerID != "priority-1" || topic.Markers[1].MarkerID != "task-done" {
+		t.Fatalf("markers: %+v", topic.Markers)
+	}
+}
+
+func assertBulkMetaParentChild(t *testing.T, rt *xmind.Topic) {
+	t.Helper()
+	if rt.Children == nil || len(rt.Children.Attached) != 1 {
+		t.Fatal("expected one top-level branch")
+	}
+	parent := &rt.Children.Attached[0]
+	assertBulkMetaParent(t, parent)
+	if parent.Children == nil || len(parent.Children.Attached) != 1 {
+		t.Fatal("expected one child")
+	}
+	assertBulkMetaChild(t, &parent.Children.Attached[0])
+}
+
+func assertBulkMetaParent(t *testing.T, parent *xmind.Topic) {
+	t.Helper()
+	if parent.Title != "Parent" || parent.Notes == nil || parent.Notes.Plain == nil || parent.Notes.Plain.Content != "parent note" {
+		t.Fatalf("parent metadata: %+v", parent)
+	}
+}
+
+func assertBulkMetaChild(t *testing.T, child *xmind.Topic) {
+	t.Helper()
+	if child.Title != "Child" || len(child.Markers) != 1 || child.Markers[0].MarkerID != "task-ongoing" {
+		t.Fatalf("child metadata: %+v", child)
+	}
+}
+
+func assertMoveResponseBasic(t *testing.T, mv moveTopicResponse, topicID, parentID string, pos int, sib int) {
+	t.Helper()
+	if mv.TopicID != topicID || mv.ParentID != parentID || mv.Position != pos || mv.SiblingCount != sib {
+		t.Fatalf("unexpected move response: %+v", mv)
+	}
+}
+
+func assertRootOnlyChildIs(t *testing.T, root *xmind.Topic, childID string) {
+	t.Helper()
+	if root.Children == nil || len(root.Children.Attached) != 1 || root.Children.Attached[0].ID != childID {
+		t.Fatalf("root should have only %s as direct child; got %+v", childID, root.Children)
+	}
+}
+
+func assertGammaHasOnlyChildAlpha(t *testing.T, root *xmind.Topic, gammaID, alphaID string) {
+	t.Helper()
+	gamma := findTopicByID(root, gammaID)
+	if gamma == nil {
+		t.Fatal("Gamma not found")
+	}
+	if gamma.Children == nil || len(gamma.Children.Attached) != 1 {
+		t.Fatalf("Gamma should have exactly 1 child; got %+v", gamma.Children)
+	}
+	if gamma.Children.Attached[0].ID != alphaID {
+		t.Fatalf("expected Alpha under Gamma; got %+v", gamma.Children.Attached[0])
+	}
+	if findTopicByID(root, alphaID) == nil {
+		t.Fatal("Alpha was lost from the tree")
+	}
+}
+
+func assertSetTopicPropertiesRoot(t *testing.T, topic *xmind.Topic) {
+	t.Helper()
+	assertNoteBodyDiv(t, topic)
+	if len(topic.Labels) != 2 || topic.Labels[0] != "l1" || topic.Labels[1] != "l2" {
+		t.Fatalf("labels: %v", topic.Labels)
+	}
+	if len(topic.Markers) != 1 || topic.Markers[0].MarkerID != "priority-1" {
+		t.Fatalf("markers: %+v", topic.Markers)
+	}
+	if topic.Href != "https://example.com" {
+		t.Fatalf("href: %q", topic.Href)
+	}
+}
+
+func assertNoteBodyDiv(t *testing.T, topic *xmind.Topic) {
+	t.Helper()
+	if topic.Notes == nil || topic.Notes.Plain == nil || topic.Notes.Plain.Content != "Note body" ||
+		topic.Notes.RealHTML == nil || topic.Notes.RealHTML.Content != "<div>Note body</div>" {
+		t.Fatalf("notes: %+v", topic.Notes)
+	}
+}
+
+func setupSummaryRangeKitchenSink(t *testing.T, h *XMindHandler, path string, sid, rid string) {
+	t.Helper()
+	for _, title := range []string{"A", "B", "C"} {
+		callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": title})
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := &sheets[0].RootTopic
+	sumTopicID := uuid.New().String()
+	root.Summaries = []xmind.Summary{{ID: uuid.New().String(), Range: "(0,2)", TopicID: sumTopicID}}
+	if root.Children == nil {
+		t.Fatal("expected children")
+	}
+	root.Children.Summary = []xmind.Topic{{ID: sumTopicID, Title: "S"}}
+	if err := xmind.WriteMap(path, sheets); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func topicIDWithTitle(root *xmind.Topic, title string) string {
+	if root.Children == nil {
+		return ""
+	}
+	for i := range root.Children.Attached {
+		if root.Children.Attached[i].Title == title {
+			return root.Children.Attached[i].ID
+		}
+	}
+	return ""
+}
+
+func mustSetTopicProperties(t *testing.T, h *XMindHandler, args map[string]any) {
+	t.Helper()
+	res := callTool(t, h.SetTopicProperties, args)
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+}
+
+func assertRootMarkerCount(t *testing.T, path string, want int, desc string) {
+	t.Helper()
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := sheets[0].RootTopic.Markers
+	if len(m) != want {
+		t.Fatalf("%s: want %d markers, got %+v", desc, want, m)
+	}
+}
+
+func assertRootMarkersOnlyB(t *testing.T, path string) {
+	t.Helper()
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := sheets[0].RootTopic.Markers
+	if len(m) != 1 || m[0].MarkerID != "b" {
+		t.Fatalf("markers then remove: want [b], got %+v", m)
+	}
+}
+
+func assertDuplicateHappyPathTree(t *testing.T, root *xmind.Topic, mid, newID string) {
+	t.Helper()
+	if root.Children == nil || len(root.Children.Attached) != 2 {
+		t.Fatalf("want 2 attached children on root (original Mid + duplicate), got %+v", root.Children)
+	}
+	if root.Children.Attached[0].ID != mid {
+		t.Fatalf("first child should be original Mid %s", mid)
+	}
+	if root.Children.Attached[1].ID != newID {
+		t.Fatalf("second child should be duplicate root %s, got %s", newID, root.Children.Attached[1].ID)
+	}
+	if root.Children.Attached[1].Title != "Mid" {
+		t.Fatalf("duplicate title: %+v", root.Children.Attached[1])
+	}
+	dup := root.Children.Attached[1]
+	if dup.Children == nil || len(dup.Children.Attached) != 1 ||
+		dup.Children.Attached[0].Title != "Leaf" {
+		t.Fatalf("duplicate should include Leaf: %+v", dup.Children)
+	}
+}
+
+func assertPostAddTopicChildPersisted(t *testing.T, path, revBefore, newID string) {
+	t.Helper()
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sheets[0].RevisionID == revBefore {
+		t.Fatal("expected sheet RevisionID to change after AddTopic")
+	}
+	rt := sheets[0].RootTopic
+	if rt.Children == nil || len(rt.Children.Attached) != 1 {
+		t.Fatalf("expected one attached child, got %+v", rt.Children)
+	}
+	if rt.Children.Attached[0].ID != newID || rt.Children.Attached[0].Title != "Child" {
+		t.Fatalf("unexpected child: %+v", rt.Children.Attached[0])
+	}
+}
+
 func TestAddTopicAndRevisionID(t *testing.T) {
 	h := NewXMindHandler()
 	dir := t.TempDir()
@@ -85,20 +381,7 @@ func TestAddTopicAndRevisionID(t *testing.T) {
 		t.Fatalf("unexpected add topic response: %+v", added)
 	}
 
-	sheets, err = xmind.ReadMap(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sheets[0].RevisionID == revBefore {
-		t.Fatal("expected sheet RevisionID to change after AddTopic")
-	}
-	rt := sheets[0].RootTopic
-	if rt.Children == nil || len(rt.Children.Attached) != 1 {
-		t.Fatalf("expected one attached child, got %+v", rt.Children)
-	}
-	if rt.Children.Attached[0].ID != newID || rt.Children.Attached[0].Title != "Child" {
-		t.Fatalf("unexpected child: %+v", rt.Children.Attached[0])
-	}
+	assertPostAddTopicChildPersisted(t, path, revBefore, newID)
 }
 
 func TestAddTopicTitleAmpersandWritesLiteralContentJSON(t *testing.T) {
@@ -124,27 +407,7 @@ func TestAddTopicTitleAmpersandWritesLiteralContentJSON(t *testing.T) {
 	if res.IsError {
 		t.Fatal(textContent(t, res))
 	}
-	zr, err := zip.OpenReader(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = zr.Close() }()
-	var raw []byte
-	for _, f := range zr.File {
-		if f.Name != "content.json" {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw, err = io.ReadAll(rc)
-		_ = rc.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		break
-	}
+	raw := readZipContentJSON(t, path)
 	if len(raw) == 0 {
 		t.Fatal("content.json not found or empty in zip")
 	}
@@ -201,33 +464,13 @@ func TestAddTopicsBulkNested(t *testing.T) {
 	if bulk.AddedCount != 3 || len(bulk.RootTopicIDs) != 1 || bulk.FirstPosition != 0 || bulk.SiblingCount != 1 {
 		t.Fatalf("unexpected bulk response: %+v", bulk)
 	}
-	if bulk.ParentID != rootID {
-		t.Fatalf("unexpected parentId: got %q want %q", bulk.ParentID, rootID)
-	}
 
 	sheets, err = xmind.ReadMap(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt := sheets[0].RootTopic
-	if rt.Children == nil || len(rt.Children.Attached) != 1 {
-		t.Fatal("expected one top-level branch")
-	}
-	l1 := &rt.Children.Attached[0]
-	if bulk.RootTopicIDs[0] != l1.ID {
-		t.Fatalf("rootTopicIds[0] %q != L1 id %q", bulk.RootTopicIDs[0], l1.ID)
-	}
-	if l1.Title != "L1" || l1.Children == nil || len(l1.Children.Attached) != 1 {
-		t.Fatalf("L1: %+v", l1)
-	}
-	l2 := &l1.Children.Attached[0]
-	if l2.Title != "L2" || l2.Children == nil || len(l2.Children.Attached) != 1 {
-		t.Fatalf("L2: %+v", l2)
-	}
-	l3 := &l2.Children.Attached[0]
-	if l3.Title != "L3" {
-		t.Fatalf("L3: %+v", l3)
-	}
+	rt := &sheets[0].RootTopic
+	assertNestedBulkL1L2L3(t, rt, bulk, rootID)
 }
 
 func TestAddTopicWithInlineMetadata(t *testing.T) {
@@ -267,27 +510,7 @@ func TestAddTopicWithInlineMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	topic := findTopicByID(&sheets[0].RootTopic, newID)
-	if topic == nil {
-		t.Fatal("topic not found after add")
-	}
-	if topic.Title != "WithMeta" {
-		t.Fatalf("title: got %q", topic.Title)
-	}
-	if topic.Notes == nil || topic.Notes.Plain == nil || topic.Notes.Plain.Content != wantNote {
-		t.Fatalf("notes plain: %+v", topic.Notes)
-	}
-	if topic.Notes.RealHTML == nil || topic.Notes.RealHTML.Content == "" {
-		t.Fatalf("notes realHTML missing: %+v", topic.Notes)
-	}
-	if len(topic.Labels) != 2 || topic.Labels[0] != "a" || topic.Labels[1] != "b" {
-		t.Fatalf("labels: %+v", topic.Labels)
-	}
-	if len(topic.Markers) != 2 || topic.Markers[0].MarkerID != "priority-1" || topic.Markers[1].MarkerID != "task-done" {
-		t.Fatalf("markers: %+v", topic.Markers)
-	}
-	if topic.Href != wantLink {
-		t.Fatalf("href: got %q want %q", topic.Href, wantLink)
-	}
+	assertTopicInlineMetadata(t, topic, "WithMeta", wantNote, wantLink)
 }
 
 func TestAddTopicsBulkWithPerTopicMetadata(t *testing.T) {
@@ -334,21 +557,7 @@ func TestAddTopicsBulkWithPerTopicMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt := sheets[0].RootTopic
-	if rt.Children == nil || len(rt.Children.Attached) != 1 {
-		t.Fatal("expected one top-level branch")
-	}
-	parent := &rt.Children.Attached[0]
-	if parent.Title != "Parent" || parent.Notes == nil || parent.Notes.Plain == nil || parent.Notes.Plain.Content != "parent note" {
-		t.Fatalf("parent metadata: %+v", parent)
-	}
-	if parent.Children == nil || len(parent.Children.Attached) != 1 {
-		t.Fatal("expected one child")
-	}
-	child := &parent.Children.Attached[0]
-	if child.Title != "Child" || len(child.Markers) != 1 || child.Markers[0].MarkerID != "task-ongoing" {
-		t.Fatalf("child metadata: %+v", child)
-	}
+	assertBulkMetaParentChild(t, &sheets[0].RootTopic)
 }
 
 func TestAddTopicsBulkMalformedMarkersToolError(t *testing.T) {
@@ -669,14 +878,10 @@ func TestMoveTopic(t *testing.T) {
 		t.Fatal(textContent(t, res))
 	}
 	mv := parseMoveTopicResult(t, res)
-	if mv.TopicID != bID || mv.ParentID != aID || mv.Position != 0 || mv.SiblingCount != 1 {
-		t.Fatalf("unexpected move response: %+v", mv)
-	}
+	assertMoveResponseBasic(t, mv, bID, aID, 0, 1)
 	sheets, _ = xmind.ReadMap(path)
 	root := &sheets[0].RootTopic
-	if root.Children == nil || len(root.Children.Attached) != 1 || root.Children.Attached[0].ID != aID {
-		t.Fatalf("root should have only A after move; got %+v", root.Children)
-	}
+	assertRootOnlyChildIs(t, root, aID)
 	a := findTopicByID(root, aID)
 	if a == nil || a.Children == nil || len(a.Children.Attached) != 1 || a.Children.Attached[0].ID != bID {
 		t.Fatalf("B not under A: %+v", a)
@@ -718,37 +923,12 @@ func TestMoveTopicSiblingForward(t *testing.T) {
 		t.Fatalf("MoveTopic: %s", textContent(t, res))
 	}
 	mv := parseMoveTopicResult(t, res)
-	if mv.TopicID != alphaID || mv.ParentID != gammaID || mv.Position != 0 || mv.SiblingCount != 1 {
-		t.Fatalf("unexpected move response: %+v", mv)
-	}
+	assertMoveResponseBasic(t, mv, alphaID, gammaID, 0, 1)
 
 	sheets, _ = xmind.ReadMap(path)
 	root := &sheets[0].RootTopic
-
-	// Root should have only Gamma as a direct child.
-	if root.Children == nil || len(root.Children.Attached) != 1 {
-		t.Fatalf("root should have exactly 1 child after move; got %+v", root.Children)
-	}
-	if root.Children.Attached[0].ID != gammaID {
-		t.Fatalf("expected Gamma as root's only child; got %+v", root.Children.Attached[0])
-	}
-
-	// Gamma should have Alpha as a child.
-	gamma := findTopicByID(root, gammaID)
-	if gamma == nil {
-		t.Fatal("Gamma not found")
-	}
-	if gamma.Children == nil || len(gamma.Children.Attached) != 1 {
-		t.Fatalf("Gamma should have exactly 1 child; got %+v", gamma.Children)
-	}
-	if gamma.Children.Attached[0].ID != alphaID {
-		t.Fatalf("expected Alpha under Gamma; got %+v", gamma.Children.Attached[0])
-	}
-
-	// Alpha must still exist in the tree (was being silently dropped before fix).
-	if findTopicByID(root, alphaID) == nil {
-		t.Fatal("Alpha was lost from the tree (stale-pointer bug)")
-	}
+	assertRootOnlyChildIs(t, root, gammaID)
+	assertGammaHasOnlyChildAlpha(t, root, gammaID, alphaID)
 }
 
 // TestMoveTopicSiblingBackward moves a topic to a sibling that appears BEFORE it
@@ -782,33 +962,12 @@ func TestMoveTopicSiblingBackward(t *testing.T) {
 		t.Fatalf("MoveTopic: %s", textContent(t, res))
 	}
 	mv := parseMoveTopicResult(t, res)
-	if mv.TopicID != alphaID || mv.ParentID != gammaID || mv.Position != 0 || mv.SiblingCount != 1 {
-		t.Fatalf("unexpected move response: %+v", mv)
-	}
+	assertMoveResponseBasic(t, mv, alphaID, gammaID, 0, 1)
 
 	sheets, _ = xmind.ReadMap(path)
 	root := &sheets[0].RootTopic
-
-	if root.Children == nil || len(root.Children.Attached) != 1 {
-		t.Fatalf("root should have exactly 1 child after move; got %+v", root.Children)
-	}
-	if root.Children.Attached[0].ID != gammaID {
-		t.Fatalf("expected Gamma as root's only child; got %+v", root.Children.Attached[0])
-	}
-
-	gamma := findTopicByID(root, gammaID)
-	if gamma == nil {
-		t.Fatal("Gamma not found")
-	}
-	if gamma.Children == nil || len(gamma.Children.Attached) != 1 {
-		t.Fatalf("Gamma should have exactly 1 child; got %+v", gamma.Children)
-	}
-	if gamma.Children.Attached[0].ID != alphaID {
-		t.Fatalf("expected Alpha under Gamma; got %+v", gamma.Children.Attached[0])
-	}
-	if findTopicByID(root, alphaID) == nil {
-		t.Fatal("Alpha was lost from the tree")
-	}
+	assertRootOnlyChildIs(t, root, gammaID)
+	assertGammaHasOnlyChildAlpha(t, root, gammaID, alphaID)
 }
 
 func TestReorderChildrenMismatch(t *testing.T) {
@@ -886,20 +1045,7 @@ func TestSetTopicProperties(t *testing.T) {
 		t.Fatal(textContent(t, res))
 	}
 	sheets, _ = xmind.ReadMap(path)
-	topic := &sheets[0].RootTopic
-	if topic.Notes == nil || topic.Notes.Plain == nil || topic.Notes.Plain.Content != "Note body" ||
-		topic.Notes.RealHTML == nil || topic.Notes.RealHTML.Content != "<div>Note body</div>" {
-		t.Fatalf("notes: %+v", topic.Notes)
-	}
-	if len(topic.Labels) != 2 || topic.Labels[0] != "l1" || topic.Labels[1] != "l2" {
-		t.Fatalf("labels: %v", topic.Labels)
-	}
-	if len(topic.Markers) != 1 || topic.Markers[0].MarkerID != "priority-1" {
-		t.Fatalf("markers: %+v", topic.Markers)
-	}
-	if topic.Href != "https://example.com" {
-		t.Fatalf("href: %q", topic.Href)
-	}
+	assertSetTopicPropertiesRoot(t, &sheets[0].RootTopic)
 }
 
 func TestAddFloatingTopic(t *testing.T) {
@@ -1022,31 +1168,12 @@ func TestDeleteTopicCollapsesSummaryRange(t *testing.T) {
 	}
 	sid := sheets[0].ID
 	rid := sheets[0].RootTopic.ID
-	for _, title := range []string{"A", "B", "C"} {
-		callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": title})
-	}
+	setupSummaryRangeKitchenSink(t, h, path, sid, rid)
 	sheets, err = xmind.ReadMap(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := &sheets[0].RootTopic
-	sumTopicID := uuid.New().String()
-	root.Summaries = []xmind.Summary{{ID: uuid.New().String(), Range: "(0,2)", TopicID: sumTopicID}}
-	if root.Children == nil {
-		t.Fatal("expected children")
-	}
-	root.Children.Summary = []xmind.Topic{{ID: sumTopicID, Title: "S"}}
-	if err := xmind.WriteMap(path, sheets); err != nil {
-		t.Fatal(err)
-	}
-
-	var bID string
-	for i := range root.Children.Attached {
-		if root.Children.Attached[i].Title == "B" {
-			bID = root.Children.Attached[i].ID
-			break
-		}
-	}
+	bID := topicIDWithTitle(&sheets[0].RootTopic, "B")
 	if bID == "" {
 		t.Fatal("topic B not found")
 	}
@@ -1059,7 +1186,7 @@ func TestDeleteTopicCollapsesSummaryRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root = &sheets[0].RootTopic
+	root := &sheets[0].RootTopic
 	if len(root.Summaries) != 1 || root.Summaries[0].Range != "(0,1)" {
 		t.Fatalf("want summary range (0,1), got %+v", root.Summaries)
 	}
@@ -1101,6 +1228,17 @@ func TestSetTopicPropertiesPartial(t *testing.T) {
 	}
 }
 
+func assertRootNotesNilAfter(t *testing.T, path, label string) {
+	t.Helper()
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sheets[0].RootTopic.Notes != nil {
+		t.Fatalf("%s: want nil notes, got %+v", label, sheets[0].RootTopic.Notes)
+	}
+}
+
 func TestSetTopicPropertiesClearSemantics(t *testing.T) {
 	h := NewXMindHandler()
 	dir := t.TempDir()
@@ -1110,71 +1248,43 @@ func TestSetTopicPropertiesClearSemantics(t *testing.T) {
 	sid := sheets[0].ID
 	tid := sheets[0].RootTopic.ID
 
-	res := callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
 		"notes": "keep", "labels": []any{"x"}, "markers": []any{"priority-1"}, "link": "https://a.example",
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
-
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid, "notes": "",
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
-	sheets, _ = xmind.ReadMap(path)
-	if sheets[0].RootTopic.Notes != nil {
-		t.Fatalf("notes empty string: want nil, got %+v", sheets[0].RootTopic.Notes)
-	}
+	assertRootNotesNilAfter(t, path, "notes empty string")
 
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
 		"notes": "n2", "labels": []any{"y"}, "markers": []any{"task-done"}, "link": "https://b.example",
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid, "notes": nil,
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
-	sheets, _ = xmind.ReadMap(path)
-	if sheets[0].RootTopic.Notes != nil {
-		t.Fatalf("notes nil: want nil, got %+v", sheets[0].RootTopic.Notes)
-	}
+	assertRootNotesNilAfter(t, path, "notes nil")
 
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid, "labels": []any{},
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
 	sheets, _ = xmind.ReadMap(path)
 	if len(sheets[0].RootTopic.Labels) != 0 {
 		t.Fatalf("labels: want empty, got %v", sheets[0].RootTopic.Labels)
 	}
 
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid, "markers": []any{},
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
 	sheets, _ = xmind.ReadMap(path)
 	if len(sheets[0].RootTopic.Markers) != 0 {
 		t.Fatalf("markers: want empty, got %+v", sheets[0].RootTopic.Markers)
 	}
 
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid, "link": "",
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
 	sheets, _ = xmind.ReadMap(path)
 	if sheets[0].RootTopic.Href != "" {
 		t.Fatalf("link: want empty href, got %q", sheets[0].RootTopic.Href)
@@ -1190,88 +1300,55 @@ func TestSetTopicPropertiesRemoveMarkers(t *testing.T) {
 	sid := sheets[0].ID
 	tid := sheets[0].RootTopic.ID
 
-	res := callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
 		"markers": []any{"priority-1", "task-done"},
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
 		"remove_markers": []any{},
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
-	sheets, _ = xmind.ReadMap(path)
-	m := sheets[0].RootTopic.Markers
-	if len(m) != 2 {
-		t.Fatalf("empty remove_markers: want two markers, got %+v", m)
-	}
+	assertRootMarkerCount(t, path, 2, "empty remove_markers")
 
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
 		"remove_markers": []any{"unknown-id"},
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
-	sheets, _ = xmind.ReadMap(path)
-	m = sheets[0].RootTopic.Markers
-	if len(m) != 2 {
-		t.Fatalf("unknown remove id: want two markers, got %+v", m)
-	}
+	assertRootMarkerCount(t, path, 2, "unknown remove id")
 
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
 		"remove_markers": []any{"priority-1"},
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
 	sheets, _ = xmind.ReadMap(path)
-	m = sheets[0].RootTopic.Markers
+	m := sheets[0].RootTopic.Markers
 	if len(m) != 1 || m[0].MarkerID != "task-done" {
 		t.Fatalf("partial remove: want [task-done], got %+v", m)
 	}
 
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
 		"markers": []any{},
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
 	sheets, _ = xmind.ReadMap(path)
 	if len(sheets[0].RootTopic.Markers) != 0 {
 		t.Fatalf("markers empty array: want no markers, got %+v", sheets[0].RootTopic.Markers)
 	}
 
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
 		"remove_markers": []any{"still-unknown"},
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
 	sheets, _ = xmind.ReadMap(path)
 	if len(sheets[0].RootTopic.Markers) != 0 {
 		t.Fatalf("remove_markers with no markers: want empty, got %+v", sheets[0].RootTopic.Markers)
 	}
 
-	res = callTool(t, h.SetTopicProperties, map[string]any{
+	mustSetTopicProperties(t, h, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": tid,
 		"markers": []any{"a", "b"}, "remove_markers": []any{"a"},
 	})
-	if res.IsError {
-		t.Fatal(textContent(t, res))
-	}
-	sheets, _ = xmind.ReadMap(path)
-	m = sheets[0].RootTopic.Markers
-	if len(m) != 1 || m[0].MarkerID != "b" {
-		t.Fatalf("markers then remove: want [b], got %+v", m)
-	}
+	assertRootMarkersOnlyB(t, path)
 }
 
 func nestBulkTopic(depth int) any {
@@ -2125,13 +2202,7 @@ func TestDuplicateTopicHappyPath(t *testing.T) {
 	res := callTool(t, h.DuplicateTopic, map[string]any{
 		"path": path, "sheet_id": sid, "topic_id": mid, "target_parent_id": rid,
 	})
-	if res.IsError {
-		t.Fatalf("DuplicateTopic: %s", textContent(t, res))
-	}
-	var dup duplicateTopicResponse
-	if err := json.Unmarshal([]byte(textContent(t, res)), &dup); err != nil {
-		t.Fatalf("parse duplicate topic JSON: %v", err)
-	}
+	dup := parseDuplicateTopicResult(t, res)
 	if dup.SourceID != mid || dup.ParentID != rid || dup.CopiedCount != 2 {
 		t.Fatalf("unexpected duplicate response: %+v", dup)
 	}
@@ -2147,22 +2218,7 @@ func TestDuplicateTopicHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := &sheets[0].RootTopic
-	if root.Children == nil || len(root.Children.Attached) != 2 {
-		t.Fatalf("want 2 attached children on root (original Mid + duplicate), got %+v", root.Children)
-	}
-	if root.Children.Attached[0].ID != mid {
-		t.Fatalf("first child should be original Mid %s", mid)
-	}
-	if root.Children.Attached[1].ID != newID {
-		t.Fatalf("second child should be duplicate root %s, got %s", newID, root.Children.Attached[1].ID)
-	}
-	if root.Children.Attached[1].Title != "Mid" {
-		t.Fatalf("duplicate title: %+v", root.Children.Attached[1])
-	}
-	if root.Children.Attached[1].Children == nil || len(root.Children.Attached[1].Children.Attached) != 1 ||
-		root.Children.Attached[1].Children.Attached[0].Title != "Leaf" {
-		t.Fatalf("duplicate should include Leaf: %+v", root.Children.Attached[1].Children)
-	}
+	assertDuplicateHappyPathTree(t, root, mid, newID)
 }
 
 func TestDuplicateTopicPositionInsertAtZeroAndAppend(t *testing.T) {

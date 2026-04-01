@@ -7,9 +7,8 @@ import (
 	"github.com/mab-go/xmind-mcp/internal/xmind"
 )
 
-func TestDeepCloneTopicRemapSummaryAndBoundaryIDs(t *testing.T) {
-	summaryTopicID := uuid.New().String()
-	root := &xmind.Topic{
+func deepCloneFixtureTopic(summaryTopicID string) *xmind.Topic {
+	return &xmind.Topic{
 		ID: "root-old",
 		Boundaries: []xmind.Boundary{
 			{ID: "bound-old", Range: "(0,0)"},
@@ -22,10 +21,10 @@ func TestDeepCloneTopicRemapSummaryAndBoundaryIDs(t *testing.T) {
 			Summary:  []xmind.Topic{{ID: summaryTopicID, Title: "Sum"}},
 		},
 	}
-	clone, err := deepCloneTopic(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+}
+
+func assertDeepCloneRootAndAttached(t *testing.T, root, clone *xmind.Topic, summaryTopicID string) {
+	t.Helper()
 	if clone.ID == root.ID {
 		t.Fatal("root id should change")
 	}
@@ -35,9 +34,17 @@ func TestDeepCloneTopicRemapSummaryAndBoundaryIDs(t *testing.T) {
 	if len(clone.Children.Summary) != 1 || clone.Children.Summary[0].ID == summaryTopicID {
 		t.Fatalf("summary topic id should change: %+v", clone.Children.Summary[0])
 	}
+}
+
+func assertDeepCloneBoundaries(t *testing.T, clone *xmind.Topic) {
+	t.Helper()
 	if clone.Boundaries[0].ID == "bound-old" || clone.Boundaries[0].Range != "(0,0)" {
 		t.Fatalf("boundary: want new id and preserved range, got %+v", clone.Boundaries[0])
 	}
+}
+
+func assertDeepCloneSummaryDescriptors(t *testing.T, clone *xmind.Topic) {
+	t.Helper()
 	if clone.Summaries[0].ID == "sum-old" {
 		t.Fatal("summary descriptor id should change")
 	}
@@ -48,6 +55,18 @@ func TestDeepCloneTopicRemapSummaryAndBoundaryIDs(t *testing.T) {
 	if clone.Summaries[0].Range != "(0,1)" {
 		t.Fatalf("summary range should be preserved, got %q", clone.Summaries[0].Range)
 	}
+}
+
+func TestDeepCloneTopicRemapSummaryAndBoundaryIDs(t *testing.T) {
+	summaryTopicID := uuid.New().String()
+	root := deepCloneFixtureTopic(summaryTopicID)
+	clone, err := deepCloneTopic(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDeepCloneRootAndAttached(t, root, &clone, summaryTopicID)
+	assertDeepCloneBoundaries(t, &clone)
+	assertDeepCloneSummaryDescriptors(t, &clone)
 }
 
 func TestAncestryPathHelper(t *testing.T) {
