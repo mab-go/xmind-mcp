@@ -139,6 +139,34 @@ type listRelationshipsItem struct {
 	Title     string `json:"title,omitempty"`
 }
 
+func listRelationshipsItems(sh *xmind.Sheet) []listRelationshipsItem {
+	rels := make([]listRelationshipsItem, 0, len(sh.Relationships))
+	for i := range sh.Relationships {
+		rel := &sh.Relationships[i]
+		item := listRelationshipItemFrom(sh, rel)
+		rels = append(rels, item)
+	}
+	return rels
+}
+
+func listRelationshipItemFrom(sh *xmind.Sheet, rel *xmind.Relationship) listRelationshipsItem {
+	item := listRelationshipsItem{
+		ID:     rel.ID,
+		End1ID: rel.End1ID,
+		End2ID: rel.End2ID,
+	}
+	if t1 := findTopicByID(&sh.RootTopic, rel.End1ID); t1 != nil {
+		item.End1Title = t1.Title
+	}
+	if t2 := findTopicByID(&sh.RootTopic, rel.End2ID); t2 != nil {
+		item.End2Title = t2.Title
+	}
+	if rel.Title != "" {
+		item.Title = rel.Title
+	}
+	return item
+}
+
 // ListRelationships returns all relationships on a sheet with endpoint topic titles.
 func (h *XMindHandler) ListRelationships(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
@@ -165,25 +193,7 @@ func (h *XMindHandler) ListRelationships(ctx context.Context, req mcp.CallToolRe
 		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
 	}
 
-	rels := make([]listRelationshipsItem, 0, len(sh.Relationships))
-	for i := range sh.Relationships {
-		rel := &sh.Relationships[i]
-		item := listRelationshipsItem{
-			ID:     rel.ID,
-			End1ID: rel.End1ID,
-			End2ID: rel.End2ID,
-		}
-		if t1 := findTopicByID(&sh.RootTopic, rel.End1ID); t1 != nil {
-			item.End1Title = t1.Title
-		}
-		if t2 := findTopicByID(&sh.RootTopic, rel.End2ID); t2 != nil {
-			item.End2Title = t2.Title
-		}
-		if rel.Title != "" {
-			item.Title = rel.Title
-		}
-		rels = append(rels, item)
-	}
+	rels := listRelationshipsItems(sh)
 
 	resp := listRelationshipsResponse{
 		SheetID:           sh.ID,
@@ -272,22 +282,13 @@ func (h *XMindHandler) AddSheet(ctx context.Context, req mcp.CallToolRequest) (*
 		return toolErr, nil
 	}
 
-	rawTitle, ok := args["title"]
-	if !ok {
-		return mcp.NewToolResultError("missing required argument: title"), nil
+	sheetTitle, terr := requireString(args, "title")
+	if terr != nil {
+		return terr, nil
 	}
-	sheetTitle, ok := rawTitle.(string)
-	if !ok || sheetTitle == "" {
-		return mcp.NewToolResultError("invalid argument title: expected a non-empty string"), nil
-	}
-
-	rawRoot, ok := args["root_title"]
-	if !ok {
-		return mcp.NewToolResultError("missing required argument: root_title"), nil
-	}
-	rootTitle, ok := rawRoot.(string)
-	if !ok || rootTitle == "" {
-		return mcp.NewToolResultError("invalid argument root_title: expected a non-empty string"), nil
+	rootTitle, terr := requireString(args, "root_title")
+	if terr != nil {
+		return terr, nil
 	}
 
 	sheets, toolErr2, err := statAndReadMap(absPath)
