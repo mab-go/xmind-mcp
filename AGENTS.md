@@ -14,6 +14,7 @@ This file is the authoritative briefing for any AI agent working on this project
 
 ```
 Dockerfile                — multi-stage image (Alpine build, distroless runtime)
+CLAUDE.md                 — symlink → AGENTS.md (Claude Code auto-loads this)
 .dockerignore             — Docker build context exclusions
 .github/
   workflows/
@@ -50,10 +51,20 @@ internal/
   logging/                — context-carried logging helpers; do not modify
 testdata/
   kitchen-sink.xmind      — primary test fixture; exercises every supported feature
+.agents/
+  skills/
+    ask-questions/         — structured question-gathering with tiered unknowns
+    commit-message/        — Git commit message generation from diffs
+    explore-codebase/      — systematic pre-implementation codebase exploration
+    make-todos/            — structured task list creation and tracking
+    review-plan/           — plan review for accuracy, correctness, and task items
+    verify-changes/        — build/test/lint verification and doc update checks
+.claude/
+  skills/                 — symlink → ../.agents/skills/
 .cursor/
   rules/
     keep-docs-current.mdc — always-on rule: update docs after structural changes
-  skills/                 — agent skill definitions (invoke via /skill-name)
+  skills/                 — symlink → ../.agents/skills/
 ```
 
 ---
@@ -250,7 +261,7 @@ Treat a change as incomplete until **`make build test lint`** passes locally. Th
 
 **Cyclomatic complexity (report-only):** After `make setup`, **`make cyclo`** runs [gocyclo](https://github.com/fzipp/gocyclo) with **`-over 10`** on the module tree (`gocyclo` takes a directory path, not a Go package pattern—see the Makefile). It lists functions with complexity **strictly greater than 10** (including `*_test.go`). This is a stricter bar than [Go Report Card](https://goreportcard.com/)’s public check (**cyclo-over=15**); the badge’s **percentage is file-based** (any over-threshold function fails the file), while the CLI lists **individual functions**, so do not expect the same headline number. CI uploads a **`cyclo.txt`** artifact from a **non-blocking** job; it does not fail the workflow when violations exist.
 
-Also verify that documentation reflects the change before finishing. Update **`AGENTS.md`**, **`.cursor/rules/`**, and **`.cursor/skills/`** as needed:
+Also verify that documentation reflects the change before finishing. Update **`AGENTS.md`**, **`.cursor/rules/`**, and **`.agents/skills/`** as needed:
 
 | Change made | What to review/update |
 |---|---|
@@ -259,7 +270,7 @@ Also verify that documentation reflects the change before finishing. Update **`A
 | New tool registered | Conventions section in `AGENTS.md` if a new pattern is introduced |
 | New struct field or codec allowlist entry | Schema Critical Notes in `AGENTS.md` |
 | New convention established | `Conventions` section in `AGENTS.md` |
-| New `.cursor/rules/` or `.cursor/skills/` file | Reflect in `AGENTS.md` if it affects agent behavior |
+| New `.cursor/rules/` or `.agents/skills/` file | Reflect in `AGENTS.md` if it affects agent behavior |
 
 ---
 
