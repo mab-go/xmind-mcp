@@ -1,7 +1,7 @@
 # xmind-mcp
 
 <p align="center">
-  <a href="https://github.com/mab-go/xmind-mcp/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mab-go/xmind-mcp/ci.yml?style=flat&logo=github&logoColor=white&labelColor=555555&label=build" alt="Build Status" /></a>
+  <a href="https://github.com/mab-go/xmind-mcp/actions"><img src="https://img.shields.io/github/check-runs/mab-go/xmind-mcp/main?style=flat&labelColor=555555&label=checks" alt="Build Status" /></a>
   <a href="https://goreportcard.com/report/github.com/mab-go/xmind-mcp"><img src="https://goreportcard.com/badge/github.com/mab-go/xmind-mcp" alt="Go Report Card" /></a>
   <a href="https://pkg.go.dev/github.com/mab-go/xmind-mcp"><img src="https://img.shields.io/badge/-reference-00ADD8?style=flat&logo=go&logoColor=white&labelColor=555555" alt="Go Reference" /></a>
   <a href="https://deepwiki.com/mab-go/xmind-mcp"><img src="https://img.shields.io/badge/DeepWiki-xmind--mcp-blue?style=flat&logoColor=white&labelColor=555555" alt="Ask DeepWiki"></a>
