@@ -57,7 +57,8 @@ The binary is written to `./bin/xmind-mcp` with version metadata from
 > **Note:** A multi-platform container image is published to
 > [GHCR](https://github.com/mab-go/xmind-mcp/pkgs/container/xmind-mcp) on
 > each push to `main` and on version tags (see **Docker** below). Pre-built
-> release binaries for all platforms may follow in a future release.
+> binaries for Linux and Windows are attached to each tagged
+> [GitHub Release](https://github.com/mab-go/xmind-mcp/releases).
 
 ------------------------------------------------------------------------
 
@@ -187,11 +188,11 @@ Use these to resolve topic ids and titles before editing a specific branch
 of the tree. Some write tools instead need sheet-level ids or ids from
 `xmind_list_relationships`—see each tool's description.
 
-| Tool                         | Description                                                                                                                               |
-|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| `xmind_get_subtree`          | Return the full topic hierarchy rooted at a given topic (or the whole sheet).                                                             |
-| `xmind_get_topic_properties` | Return one topic's metadata as JSON (notes, markers, boundaries, sheet relationships for that topic, child counts); use to verify writes. |
-| `xmind_search_topics`        | Search for topics by keyword; returns matches with IDs, ancestryPath (titles from sheet root to parent of match, or null at sheet root), parent title, depth, and sheet fields when searching all sheets. |
+| Tool                         | Description                                                                                                                                                                                                        |
+|------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `xmind_get_subtree`          | Return the full topic hierarchy rooted at a given topic (or the whole sheet).                                                                                                                                      |
+| `xmind_get_topic_properties` | Return one topic's metadata as JSON (notes, markers, boundaries, sheet relationships for that topic, child counts); use to verify writes.                                                                          |
+| `xmind_search_topics`        | Search for topics by keyword; returns matches with IDs, ancestryPath (titles from sheet root to parent of match, or null at sheet root), parent title, depth, and sheet fields when searching all sheets.          |
 | `xmind_find_topic`           | Find a single topic by exact title; returns ID, ancestryPath (sheet-root chain to parent of match; null at sheet root; not relative to parent_id scope), plus parent/sibling context relative to the search scope. |
 
 ### Tier 3: Topic Mutations

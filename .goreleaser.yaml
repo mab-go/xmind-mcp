@@ -1,0 +1,34 @@
+version: 2
+
+builds:
+  - main: ./cmd/xmind-mcp
+    binary: xmind-mcp
+    ldflags:
+      - -X github.com/mab-go/xmind-mcp/internal/version.Version={{.Version}}
+      - -X github.com/mab-go/xmind-mcp/internal/version.Commit={{.FullCommit}}
+      - -X github.com/mab-go/xmind-mcp/internal/version.Date={{.Date}}
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
