@@ -1,4 +1,5 @@
 /bin/
+/dist/
 .xmind-tmp-*
 coverage.out
 coverage.html
