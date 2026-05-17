@@ -79,6 +79,12 @@ Before touching any code, read these files in order:
 2. **`internal/xmind/reader.go`** and **`writer.go`** — the zip I/O layer. Understand the read/write lifecycle before writing any handler.
 3. **`internal/xmind/json_codec.go`** — the custom marshal/unmarshal logic that preserves unknown keys. Read this before touching any struct that has a custom codec.
 
+**Prefer LSP for semantic Go queries.** For finding definitions, references,
+implementations, call hierarchy, or type signatures in Go code, use the LSP
+tool over grep -- gopls is configured for this repo and returns semantic
+answers that disambiguate same-named symbols across packages. Grep is still
+fine for plain text searches, non-code files, and quick locate-by-string.
+
 ---
 
 ## Read/Write Lifecycle
