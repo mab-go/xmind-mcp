@@ -229,7 +229,7 @@ var toolAddFloatingTopic = mcp.NewTool(
 
 var toolAddRelationship = mcp.NewTool(
 	"xmind_add_relationship",
-	mcp.WithDescription("Add a relationship (connector) between two topics. Stored at sheet level, not on topics."),
+	mcp.WithDescription("Add a relationship (connector) between two topics. Stored at sheet level, not on topics. from_id and to_id must be different topics."),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("from_id", mcp.Required(), mcp.Description("Source topic ID (end1Id)")),
