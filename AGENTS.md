@@ -62,6 +62,7 @@ testdata/
     make-todos/            — structured task list creation and tracking
     review-plan/           — plan review for accuracy, correctness, and task items
     verify-changes/        — build/test/lint verification and doc update checks
+    xmind-mcp-smoke-test/  — release pre-validation: exercises the full MCP tool surface against a scratch .xmind
 .claude/
   skills/                 — symlink → ../.agents/skills/
 .cursor/
