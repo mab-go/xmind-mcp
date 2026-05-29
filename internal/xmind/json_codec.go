@@ -532,7 +532,7 @@ func (s *Sheet) MarshalJSON() ([]byte, error) {
 		Class            string          `json:"class"`
 		Title            string          `json:"title"`
 		TopicOverlapping string          `json:"topicOverlapping,omitempty"`
-		RootTopic        Topic           `json:"rootTopic"`
+		RootTopic        *Topic          `json:"rootTopic"`
 		Relationships    []Relationship  `json:"relationships,omitempty"`
 		Extensions       json.RawMessage `json:"extensions,omitempty"`
 		Theme            json.RawMessage `json:"theme,omitempty"`
@@ -543,7 +543,7 @@ func (s *Sheet) MarshalJSON() ([]byte, error) {
 		Class:            s.Class,
 		Title:            s.Title,
 		TopicOverlapping: s.TopicOverlapping,
-		RootTopic:        s.RootTopic,
+		RootTopic:        &s.RootTopic,
 		Relationships:    s.Relationships,
 		Extensions:       s.Extensions,
 		Theme:            s.Theme,
