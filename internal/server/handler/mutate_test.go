@@ -3,6 +3,7 @@ package handler
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2298,6 +2299,109 @@ func TestDuplicateTopicErrors(t *testing.T) {
 	})
 	if !res.IsError || !strings.Contains(textContent(t, res), "out of range") {
 		t.Fatalf("expected position out of range, got %q", textContent(t, res))
+	}
+}
+
+// TestDuplicateTopicDanglingSummaryRefReturnsToolError reproduces issue #46: duplicating a
+// topic whose summary descriptor references a topicId absent from its subtree must surface as
+// a tool-level error (nil Go error, IsError result), not a protocol error. The handler is
+// invoked directly because callTool would t.Fatalf on the pre-fix protocol error.
+func TestDuplicateTopicDanglingSummaryRefReturnsToolError(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dangling.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := sheets[0].ID
+	rootID := sheets[0].RootTopic.ID
+
+	// Attach a child to duplicate that carries a summary descriptor whose topicId points at
+	// an id present nowhere in its subtree, then persist the malformed-but-openable map.
+	mid := uuid.New().String()
+	sheets[0].RootTopic.Children = &xmind.Children{
+		Attached: []xmind.Topic{
+			{
+				ID:    mid,
+				Title: "Mid",
+				Summaries: []xmind.Summary{
+					{ID: uuid.New().String(), Range: "(0,0)", TopicID: "ghost-id"},
+				},
+				Children: &xmind.Children{
+					Attached: []xmind.Topic{{ID: uuid.New().String(), Title: "Leaf"}},
+				},
+			},
+		},
+	}
+	if err := xmind.WriteMap(path, sheets); err != nil {
+		t.Fatal(err)
+	}
+
+	req := mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": mid, "target_parent_id": rootID,
+	}}}
+	res, err := h.DuplicateTopic(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected a tool error (nil Go error), got protocol error: %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("expected tool-level error result, got %+v", res)
+	}
+	if msg := textContent(t, res); !strings.Contains(msg, "not found in cloned subtree") {
+		t.Fatalf("unexpected error message: %q", msg)
+	}
+}
+
+// TestDuplicateCloneFailure covers both classification branches: a dangling summary reference is
+// caller-fixable (tool error, nil Go error), while any other clone failure is a genuine internal
+// fault (protocol error). The protocol-error path is unreachable via DuplicateTopic with normal
+// input, so it is exercised here directly.
+func TestDuplicateCloneFailure(t *testing.T) {
+	res, err := duplicateCloneFailure(&cloneDanglingSummaryRefError{topicID: "ghost-id"})
+	if err != nil {
+		t.Fatalf("dangling ref: expected nil Go error, got %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("dangling ref: expected tool error result, got %+v", res)
+	}
+	if msg := textContent(t, res); !strings.Contains(msg, "ghost-id") {
+		t.Fatalf("dangling ref: unexpected message %q", msg)
+	}
+
+	res, err = duplicateCloneFailure(fmt.Errorf("boom"))
+	if res != nil {
+		t.Fatalf("internal fault: expected nil result, got %+v", res)
+	}
+	if err == nil || !strings.Contains(err.Error(), "duplicate topic:") {
+		t.Fatalf("internal fault: expected wrapped protocol error, got %v", err)
+	}
+}
+
+func TestParseSummaryRange(t *testing.T) {
+	cases := []struct {
+		in       string
+		from, to int
+		ok       bool
+	}{
+		{"(0,2)", 0, 2, true},
+		{" ( 1 , 3 ) ", 1, 3, true},
+		{"(2,2)", 2, 2, true},
+		{"", 0, 0, false},       // too short, fails the paren/length guard
+		{"[0,2]", 0, 0, false},  // not paren-wrapped
+		{"(0123)", 0, 0, false}, // paren-wrapped but no comma
+		{"(a,2)", 0, 0, false},  // non-numeric bound
+		{"(2,0)", 0, 0, false},  // from greater than to
+		{"(-1,2)", 0, 0, false}, // negative bound
+	}
+	for _, c := range cases {
+		from, to, ok := parseSummaryRange(c.in)
+		if ok != c.ok || from != c.from || to != c.to {
+			t.Errorf("parseSummaryRange(%q) = (%d,%d,%v), want (%d,%d,%v)",
+				c.in, from, to, ok, c.from, c.to, c.ok)
+		}
 	}
 }
 

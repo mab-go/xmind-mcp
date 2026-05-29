@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"math"
@@ -152,12 +153,12 @@ func parseSummaryRange(r string) (from, to int, ok bool) {
 		return 0, 0, false
 	}
 	inner := strings.TrimSpace(r[1 : len(r)-1])
-	comma := strings.IndexByte(inner, ',')
-	if comma < 0 {
+	left, right, found := strings.Cut(inner, ",")
+	if !found {
 		return 0, 0, false
 	}
-	f, err1 := strconv.Atoi(strings.TrimSpace(inner[:comma]))
-	t, err2 := strconv.Atoi(strings.TrimSpace(inner[comma+1:]))
+	f, err1 := strconv.Atoi(strings.TrimSpace(left))
+	t, err2 := strconv.Atoi(strings.TrimSpace(right))
 	if err1 != nil || err2 != nil {
 		return 0, 0, false
 	}
@@ -485,6 +486,16 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 	})
 }
 
+// duplicateCloneFailure maps a deepCloneTopic error to the right MCP failure shape: a tool error
+// for a caller-fixable dangling summary reference (the source map opened fine), a protocol error
+// otherwise (nil root / JSON round-trip failures are genuine internal faults).
+func duplicateCloneFailure(err error) (*mcp.CallToolResult, error) {
+	if dangErr, ok := errors.AsType[*cloneDanglingSummaryRefError](err); ok {
+		return mcp.NewToolResultError(dangErr.Error()), nil
+	}
+	return nil, fmt.Errorf("duplicate topic: %w", err)
+}
+
 // DuplicateTopic deep-clones a topic subtree and attaches it as an attached child of target_parent_id.
 func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
@@ -517,7 +528,7 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 
 	clone, err := deepCloneTopic(source)
 	if err != nil {
-		return nil, fmt.Errorf("duplicate topic: %w", err)
+		return duplicateCloneFailure(err)
 	}
 	newRootID := clone.ID
 	n := countTopics(&clone)
