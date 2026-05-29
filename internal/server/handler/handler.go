@@ -57,6 +57,16 @@ func countTopics(t *xmind.Topic) int {
 	return n
 }
 
+// cloneDanglingSummaryRefError signals that a cloned summary descriptor references a topicId
+// absent from the cloned subtree. The source map opened fine, so this is caller-fixable bad
+// input (duplicate a different topic, or point at a different file) — handlers surface it as a
+// tool error, not a protocol error.
+type cloneDanglingSummaryRefError struct{ topicID string }
+
+func (e *cloneDanglingSummaryRefError) Error() string {
+	return fmt.Sprintf("clone topic: summary topicId %q not found in cloned subtree", e.topicID)
+}
+
 // deepCloneTopic returns a deep copy of the topic subtree with JSON round-trip (preserves codec `extra`
 // data), then assigns fresh UUIDs to every topic and to summary/boundary descriptors within the clone.
 func deepCloneTopic(root *xmind.Topic) (xmind.Topic, error) {
@@ -97,7 +107,7 @@ func remapClonedTopicIDs(root *xmind.Topic) error {
 			if oldTopicRef != "" {
 				newRef, ok := idMap[oldTopicRef]
 				if !ok {
-					remapErr = fmt.Errorf("clone topic: summary topicId %q not found in cloned subtree", oldTopicRef)
+					remapErr = &cloneDanglingSummaryRefError{topicID: oldTopicRef}
 					return false
 				}
 				s.TopicID = newRef

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -67,6 +69,36 @@ func TestDeepCloneTopicRemapSummaryAndBoundaryIDs(t *testing.T) {
 	assertDeepCloneRootAndAttached(t, root, &clone, summaryTopicID)
 	assertDeepCloneBoundaries(t, &clone)
 	assertDeepCloneSummaryDescriptors(t, &clone)
+}
+
+// danglingSummaryFixtureTopic builds a topic whose summary descriptor references a topicId that
+// exists nowhere in its subtree (no matching Children.Summary entry).
+func danglingSummaryFixtureTopic() *xmind.Topic {
+	return &xmind.Topic{
+		ID: "root-old",
+		Summaries: []xmind.Summary{
+			{ID: "sum-old", Range: "(0,0)", TopicID: "ghost-id"},
+		},
+		Children: &xmind.Children{
+			Attached: []xmind.Topic{{ID: "a-old", Title: "A"}},
+		},
+	}
+}
+
+// TestDeepCloneTopicDanglingSummaryRef pins the dangling-reference failure to the typed
+// cloneDanglingSummaryRefError so callers can classify it as a tool error (issue #46).
+func TestDeepCloneTopicDanglingSummaryRef(t *testing.T) {
+	_, err := deepCloneTopic(danglingSummaryFixtureTopic())
+	if err == nil {
+		t.Fatal("expected an error for a dangling summary reference, got nil")
+	}
+	var dangErr *cloneDanglingSummaryRefError
+	if !errors.As(err, &dangErr) {
+		t.Fatalf("expected *cloneDanglingSummaryRefError, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "not found in cloned subtree") {
+		t.Fatalf("unexpected message: %q", err.Error())
+	}
 }
 
 func TestAncestryPathHelper(t *testing.T) {
