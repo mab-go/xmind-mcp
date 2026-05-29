@@ -307,6 +307,65 @@ func (a *AttributedTitleItem) MarshalJSON() ([]byte, error) {
 	return encodeToRawMap((*alias)(a), a.extra)
 }
 
+// --- NoteContent ---
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (n *NoteContent) UnmarshalJSON(data []byte) error {
+	raw, err := unmarshalObjectMap(data)
+	if err != nil {
+		return err
+	}
+	ex := cloneJSONMap(raw)
+	deleteKeys(ex, "content")
+	if v, ok := raw["content"]; ok {
+		_ = json.Unmarshal(v, &n.Content)
+	}
+	n.extra = ex
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler.
+func (n *NoteContent) MarshalJSON() ([]byte, error) {
+	type alias NoteContent
+	return encodeToRawMap((*alias)(n), n.extra)
+}
+
+// --- Notes ---
+
+// UnmarshalJSON implements json.Unmarshaler.
+// Plain and RealHTML are only populated when their keys are present, so a plain-only note
+// does not gain an empty realHTML on round-trip.
+func (n *Notes) UnmarshalJSON(data []byte) error {
+	raw, err := unmarshalObjectMap(data)
+	if err != nil {
+		return err
+	}
+	ex := cloneJSONMap(raw)
+	deleteKeys(ex, "plain", "realHTML")
+	if v, ok := raw["plain"]; ok && jsonValueIsPresent(v) {
+		var c NoteContent
+		if err := json.Unmarshal(v, &c); err != nil {
+			return err
+		}
+		n.Plain = &c
+	}
+	if v, ok := raw["realHTML"]; ok && jsonValueIsPresent(v) {
+		var c NoteContent
+		if err := json.Unmarshal(v, &c); err != nil {
+			return err
+		}
+		n.RealHTML = &c
+	}
+	n.extra = ex
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler.
+func (n *Notes) MarshalJSON() ([]byte, error) {
+	type alias Notes
+	return encodeToRawMap((*alias)(n), n.extra)
+}
+
 // --- Children ---
 
 // UnmarshalJSON implements json.Unmarshaler.
