@@ -1513,6 +1513,34 @@ func TestAddRelationshipInvalidTopic(t *testing.T) {
 	}
 }
 
+func TestAddRelationshipSelfLoop(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rel_selfloop.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	rid := sheets[0].RootTopic.ID
+	aID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "A",
+	})).ID
+
+	res := callTool(t, h.AddRelationship, map[string]any{
+		"path": path, "sheet_id": sid, "from_id": aID, "to_id": aID,
+	})
+	if !res.IsError {
+		t.Fatal("expected error for self-loop relationship (from_id == to_id)")
+	}
+	if msg := textContent(t, res); !strings.Contains(msg, "must differ") {
+		t.Fatalf("unexpected error message: %q", msg)
+	}
+
+	sheets, _ = xmind.ReadMap(path)
+	if n := len(sheets[0].Relationships); n != 0 {
+		t.Fatalf("expected 0 relationships after self-loop rejection, got %d: %+v", n, sheets[0].Relationships)
+	}
+}
+
 func TestAddRelationshipLabelWrongType(t *testing.T) {
 	h := NewXMindHandler()
 	dir := t.TempDir()

@@ -1215,6 +1215,10 @@ func parseBulkTopicsArray(args map[string]any) ([]any, *mcp.CallToolResult) {
 }
 
 func requireRelationshipEndpoints(root *xmind.Topic, fromID, toID string) *mcp.CallToolResult {
+	if fromID == toID {
+		return mcp.NewToolResultError(fmt.Sprintf(
+			"relationship endpoints must differ: from_id and to_id are the same topic (%s)", fromID))
+	}
 	if findTopicByID(root, fromID) == nil {
 		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", fromID))
 	}
