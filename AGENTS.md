@@ -47,7 +47,7 @@ internal/
     json_codec.go         — custom JSON: preserve unknown keys, notes shape
     reader.go             — open zip, parse content.json → []Sheet
     writer.go             — serialize []Sheet → content.json, write back to zip
-    atomic_replace.go     — replaceTempFile: cross-platform atomic rename helper
+    atomic_replace.go     — replaceTempFile/replaceViaBackup: atomic replace (backup-restore on Windows)
     defaults.go           — DefaultTheme and DefaultSheetExtensions for new maps
     default_theme.json    — embedded default theme blob (sourced from kitchen-sink fixture)
     stub_content.xml      — embedded legacy content.xml written into every new zip
@@ -102,6 +102,8 @@ Every mutating tool call follows this exact pattern — do not deviate from it:
 ```
 
 **Atomicity is required.** Always write to a temp file first and rename/swap on success. If a write fails mid-way, the original file must be left untouched. There is no session state and no temp files left behind on failure.
+
+The temp-then-swap happens in `replaceTempFile` (`internal/xmind/atomic_replace.go`). On Unix, `os.Rename` atomically replaces the destination. On Windows, `os.Rename` cannot overwrite an existing file, so `replaceViaBackup` moves the original aside to a uniquely named backup first, renames the temp into place, then removes the backup — restoring the backup if the rename fails. This keeps the original recoverable on Windows; never reintroduce a plain remove-then-rename there, which can destroy the original if the rename fails.
 
 ### `content.json` fidelity (unknown keys)
 
