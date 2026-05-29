@@ -17,9 +17,10 @@ Dockerfile                — multi-stage image (Alpine build, distroless runtim
 CLAUDE.md                 — symlink → AGENTS.md (Claude Code auto-loads this)
 .dockerignore             — Docker build context exclusions
 .goreleaser.yaml          — goreleaser config; cross-builds Linux/Windows archives on `v*` tags
+codecov.yml               — Codecov config; informational (non-blocking) project & patch coverage
 .github/
   workflows/
-    ci.yml                — test, lint, and cyclomatic-complexity report artifact on push and PR
+    ci.yml                — test (+ coverage upload to Codecov), lint, and cyclomatic-complexity report artifact on push and PR
     docker-publish.yml    — multi-platform image build and push to GHCR
     release.yml           — goreleaser release on `v*` tag push (binaries to GitHub Releases)
 cmd/
