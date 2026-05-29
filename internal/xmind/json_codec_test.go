@@ -28,6 +28,106 @@ func TestNotesPlainOnlyNoRealHTML(t *testing.T) {
 	}
 }
 
+// TestNoteContentPreservesUnknownSiblingKeys covers issue #42 case 1: a key alongside
+// "content" inside a note body (e.g. notes.plain) must survive a round-trip.
+func TestNoteContentPreservesUnknownSiblingKeys(t *testing.T) {
+	const in = `{"content":"hi","foo":1}`
+	var nc NoteContent
+	if err := json.Unmarshal([]byte(in), &nc); err != nil {
+		t.Fatal(err)
+	}
+	if nc.Content != "hi" {
+		t.Fatalf("content: got %q want %q", nc.Content, "hi")
+	}
+	out, err := json.Marshal(&nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["foo"]; !ok {
+		t.Fatalf("unknown sibling key foo dropped from NoteContent: %s", out)
+	}
+}
+
+// TestNotesPreservesUnknownSiblingKeys covers issue #42 case 2: a key alongside
+// "plain"/"realHTML" on the notes object must survive a round-trip.
+func TestNotesPreservesUnknownSiblingKeys(t *testing.T) {
+	const in = `{"plain":{"content":"hi"},"bar":2}`
+	var n Notes
+	if err := json.Unmarshal([]byte(in), &n); err != nil {
+		t.Fatal(err)
+	}
+	if n.Plain == nil || n.Plain.Content != "hi" {
+		t.Fatalf("plain: %+v", n.Plain)
+	}
+	out, err := json.Marshal(&n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["bar"]; !ok {
+		t.Fatalf("unknown sibling key bar dropped from Notes: %s", out)
+	}
+}
+
+// TestNotesUnknownKeysSurviveTopicRoundTrip exercises both issue #42 cases at once through a
+// full Topic unmarshal -> marshal, confirming the fix holds via the Topic decode path.
+func TestNotesUnknownKeysSurviveTopicRoundTrip(t *testing.T) {
+	const in = `{"id":"t1","class":"topic","title":"T",` +
+		`"notes":{"plain":{"content":"hi","foo":1},"bar":2}}`
+	var topic Topic
+	if err := json.Unmarshal([]byte(in), &topic); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(&topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top struct {
+		Notes struct {
+			Plain map[string]json.RawMessage `json:"plain"`
+			Bar   json.RawMessage            `json:"bar"`
+		} `json:"notes"`
+	}
+	if err := json.Unmarshal(out, &top); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := top.Notes.Plain["foo"]; !ok {
+		t.Errorf("note-body sibling key foo dropped through Topic round-trip: %s", out)
+	}
+	if len(top.Notes.Bar) == 0 {
+		t.Errorf("notes-object sibling key bar dropped through Topic round-trip: %s", out)
+	}
+}
+
+// TestNotesAndNoteContentUnmarshalErrors covers the error branches of the note codecs:
+// a non-object body, and a malformed plain/realHTML value that fails to decode as a note.
+func TestNotesAndNoteContentUnmarshalErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		dst  json.Unmarshaler
+	}{
+		{"NoteContent non-object", `[1,2]`, new(NoteContent)},
+		{"Notes non-object", `[1,2]`, new(Notes)},
+		{"Notes malformed plain", `{"plain":[1]}`, new(Notes)},
+		{"Notes malformed realHTML", `{"realHTML":[1]}`, new(Notes)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := json.Unmarshal([]byte(tc.in), tc.dst); err == nil {
+				t.Fatalf("expected error unmarshalling %q, got nil", tc.in)
+			}
+		})
+	}
+}
+
 func TestTopicTitleMarshalUsesRawAmpersandInJSON(t *testing.T) {
 	topic := Topic{
 		ID:    "t1",
@@ -191,6 +291,42 @@ func TestSheetMarshalPreservesRootTopicUnknownKeys(t *testing.T) {
 	}
 	if _, ok := top.RootTopic["customRootKey"]; !ok {
 		t.Fatalf("missing customRootKey on rootTopic after marshal: %s", out)
+	}
+}
+
+// TestWriteMapZipRoundTripPreservesNotesExtra checks that a ReadMap -> WriteMap -> ReadMap cycle
+// keeps preserved (unknown) keys at both the Notes level and the NoteContent level. Notes are
+// attached to the root topic so the test does not depend on the fixture having note-bearing topics.
+func TestWriteMapZipRoundTripPreservesNotesExtra(t *testing.T) {
+	sheets, dst := readKitchenSinkCopy(t, "preserve-notes.xmind")
+	const notesKey = "_xmindMcpNotesPreserve"
+	const contentKey = "_xmindMcpNoteContentPreserve"
+	sheets[0].RootTopic.Notes = &Notes{
+		Plain: &NoteContent{
+			Content: "n",
+			extra:   map[string]json.RawMessage{contentKey: json.RawMessage(`{"at":"content"}`)},
+		},
+		extra: map[string]json.RawMessage{notesKey: json.RawMessage(`{"at":"notes"}`)},
+	}
+	if err := WriteMap(dst, sheets); err != nil {
+		t.Fatal(err)
+	}
+	sheets2, err := ReadMap(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := sheets2[0].RootTopic.Notes
+	if notes == nil {
+		t.Fatal("notes lost after round-trip")
+	}
+	if _, ok := notes.extra[notesKey]; !ok {
+		t.Errorf("Notes-level extra key %q dropped after zip round-trip", notesKey)
+	}
+	if notes.Plain == nil {
+		t.Fatal("notes.plain lost after round-trip")
+	}
+	if _, ok := notes.Plain.extra[contentKey]; !ok {
+		t.Errorf("NoteContent-level extra key %q dropped after zip round-trip", contentKey)
 	}
 }
 

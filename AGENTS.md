@@ -105,15 +105,15 @@ Every mutating tool call follows this exact pattern — do not deviate from it:
 
 ### `content.json` fidelity (unknown keys)
 
-Major JSON object types in the workbook tree use custom `MarshalJSON` / `UnmarshalJSON` in **`internal/xmind/json_codec.go`**. Unknown keys on those objects are stored in an unexported `extra` field (`json:"-"` on the struct) and merged back on marshal so XMind-specific or forward-compatible properties survive a read → edit → write cycle.
+Major JSON object types in the workbook tree use custom `MarshalJSON` / `UnmarshalJSON` in **`internal/xmind/json_codec.go`**. Unknown keys on those objects are stored in an unexported `extra` field (a `map[string]json.RawMessage` with no JSON tag; the custom marshaler never reflects over the struct directly) and merged back on marshal so XMind-specific or forward-compatible properties survive a read → edit → write cycle.
 
-When you add a **new first-class field** to `Sheet`, `Topic`, `Children`, `Relationship`, `Boundary`, the summary-range `Summary`, `Marker`, `Position`, `TopicImage`, or `AttributedTitleItem`, you **must** add the JSON key to the corresponding allowlist in `json_codec.go` (e.g. `topicKnownKeys`, `sheetKnownKeys`, or the `deleteKeys(...)` list for that type). Otherwise the new field will be treated as opaque preserved data and will not populate the typed field.
+When you add a **new first-class field** to `Sheet`, `Topic`, `Children`, `Relationship`, `Boundary`, the summary-range `Summary`, `Marker`, `Position`, `TopicImage`, `AttributedTitleItem`, `Notes`, or `NoteContent`, you **must** add the JSON key to the corresponding allowlist in `json_codec.go` (e.g. `topicKnownKeys`, `sheetKnownKeys`, or the `deleteKeys(...)` list for that type — `Notes` uses `"plain"`/`"realHTML"`, `NoteContent` uses `"content"`). Otherwise the new field will be treated as opaque preserved data and will not populate the typed field.
 
 **Limitation:** Sibling keys on each **`Extension`** object (alongside `provider`, `content`, `resourceRefs`) are still dropped. Non–`content.json` zip entries continue to be preserved by `WriteMap` via raw copy.
 
 **String encoding:** When persisting `content.json`, use **`xmind.WriteMap`** / **`xmind.CreateNewMap`** only. They marshal with `encoding/json` HTML escaping disabled so characters such as `&`, `<`, and `>` appear literally in JSON strings (matching XMind on-disk files). Do not use `json.Marshal` on `[]Sheet` for that payload; default marshaling can rewrite `json.Marshaler` output in ways XMind mishandles.
 
-**Notes:** `Notes` uses `*NoteContent` with `omitempty` so topics that only have `notes.plain` in the file do not gain an empty `notes.realHTML` on round-trip.
+**Notes:** `Notes` and `NoteContent` carry the same `extra` bag and custom codec as the other tree types, so unknown sibling keys (alongside `plain`/`realHTML` on the notes object, or alongside `content` inside a note body) survive a round-trip. `Notes` still uses `*NoteContent` with `omitempty` and only populates `Plain`/`RealHTML` when their keys are present, so topics that only have `notes.plain` in the file do not gain an empty `notes.realHTML` on round-trip.
 
 ---
 
@@ -358,9 +358,9 @@ Always preserve existing UUIDs — never regenerate them. Generate new UUIDs onl
 When writing a topic note, both fields must be populated. Writing only `plain` leaves the rich-text panel blank in XMind; writing raw text into `realHTML` directly renders unstyled. Use the `plainToRealHTML` helper in `mutate.go` to convert:
 
 ```go
-notes := &xmind.NoteContent{
-    Plain: xmind.NotesPlain{Content: plainText},
-    RealHTML: xmind.NotesRealHTML{Content: plainToRealHTML(plainText)},
+notes := &xmind.Notes{
+    Plain:    &xmind.NoteContent{Content: plainText},
+    RealHTML: &xmind.NoteContent{Content: plainToRealHTML(plainText)},
 }
 ```
 

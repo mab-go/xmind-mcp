@@ -98,14 +98,18 @@ type TopicImage struct {
 
 // Notes holds plain and HTML note content.
 // Either or both of Plain and RealHTML may be set; omitted keys are not reintroduced on marshal.
+// Unknown sibling keys are preserved via extra, like other workbook-tree objects.
 type Notes struct {
 	Plain    *NoteContent `json:"plain,omitempty"`
 	RealHTML *NoteContent `json:"realHTML,omitempty"`
+	extra    map[string]json.RawMessage
 }
 
 // NoteContent wraps note body.
+// Unknown sibling keys (alongside content) are preserved via extra.
 type NoteContent struct {
 	Content string `json:"content"`
+	extra   map[string]json.RawMessage
 }
 
 // Extension is task/audio/math metadata on a topic.
