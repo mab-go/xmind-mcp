@@ -165,6 +165,27 @@ full path to the binary:
 }
 ```
 
+### Log level
+
+The server logs to standard error at `info` level by default. To change it,
+pass the `--log-level` flag or set the `XMIND_MCP_LOG_LEVEL` environment
+variable (the flag wins if both are set). Accepted values are `debug`, `info`,
+`warn`, and `error`; an unrecognized value exits with an error at startup.
+
+`debug` adds per-connection lifecycle detail (the MCP `initialize` handshake).
+To enable it from a client config, set it via `env`:
+
+```json
+{
+  "mcpServers": {
+    "xmind": {
+      "command": "xmind-mcp",
+      "env": { "XMIND_MCP_LOG_LEVEL": "debug" }
+    }
+  }
+}
+```
+
 ------------------------------------------------------------------------
 
 ## Tools
