@@ -1768,6 +1768,128 @@ func TestRenameTopicClearsTitleUnedited(t *testing.T) {
 	}
 }
 
+// setupTitleUneditedMap builds a fresh map with root + attached children A and B,
+// sets titleUnedited=true on A, and persists it. It returns the handler, path,
+// sheet id, root id, and the ids of A and B.
+func setupTitleUneditedMap(t *testing.T) (h *XMindHandler, path, sid, rootID, idA, idB string) {
+	t.Helper()
+	h = NewXMindHandler()
+	dir := t.TempDir()
+	path = filepath.Join(dir, "uned.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid = sheets[0].ID
+	rootID = sheets[0].RootTopic.ID
+	idA = parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rootID, "title": "A",
+	})).ID
+	idB = parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rootID, "title": "B",
+	})).ID
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topicA := findTopicByID(&sheets[0].RootTopic, idA)
+	if topicA == nil {
+		t.Fatal("topic A missing")
+	}
+	topicA.TitleUnedited = true
+	if err := xmind.WriteMap(path, sheets); err != nil {
+		t.Fatal(err)
+	}
+	return h, path, sid, rootID, idA, idB
+}
+
+// assertTitleUneditedTrue re-reads path and asserts topic idA still carries
+// titleUnedited=true.
+func assertTitleUneditedTrue(t *testing.T, path, idA string) {
+	t.Helper()
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic := findTopicByID(&sheets[0].RootTopic, idA)
+	if topic == nil {
+		t.Fatal("topic A missing after mutation")
+	}
+	if !topic.TitleUnedited {
+		t.Fatalf("titleUnedited not preserved across unrelated mutation: %+v", topic)
+	}
+}
+
+// TestUnrelatedMutationsPreserveTitleUnedited pins issue #44 item 4: an unrelated
+// mutation must not clear titleUnedited. Only the clear-on-rename direction was
+// tested before. Each subtest sets titleUnedited=true on topic A, runs a mutation
+// that does not touch A's title, and asserts the flag survives.
+func TestUnrelatedMutationsPreserveTitleUnedited(t *testing.T) {
+	t.Run("SetTopicProperties", func(t *testing.T) {
+		h, path, sid, _, idA, _ := setupTitleUneditedMap(t)
+		res := callTool(t, h.SetTopicProperties, map[string]any{
+			"path": path, "sheet_id": sid, "topic_id": idA, "notes": "edited",
+		})
+		if res.IsError {
+			t.Fatal(textContent(t, res))
+		}
+		assertTitleUneditedTrue(t, path, idA)
+	})
+
+	t.Run("MoveTopic", func(t *testing.T) {
+		h, path, sid, rootID, idA, _ := setupTitleUneditedMap(t)
+		res := callTool(t, h.MoveTopic, map[string]any{
+			"path": path, "sheet_id": sid, "topic_id": idA, "new_parent_id": rootID, "position": float64(1),
+		})
+		if res.IsError {
+			t.Fatal(textContent(t, res))
+		}
+		assertTitleUneditedTrue(t, path, idA)
+	})
+
+	t.Run("ReorderChildren", func(t *testing.T) {
+		h, path, sid, rootID, idA, idB := setupTitleUneditedMap(t)
+		res := callTool(t, h.ReorderChildren, map[string]any{
+			"path": path, "sheet_id": sid, "parent_id": rootID, "ordered_ids": []any{idB, idA},
+		})
+		if res.IsError {
+			t.Fatal(textContent(t, res))
+		}
+		assertTitleUneditedTrue(t, path, idA)
+	})
+}
+
+// TestAddTopicPersistsTitleUneditedFalse pins the positive direction of issue #44
+// item 4: a freshly created topic must persist titleUnedited=false (absent in JSON
+// via omitempty, read back as the zero value), confirming AddTopic never sets it.
+func TestAddTopicPersistsTitleUneditedFalse(t *testing.T) {
+	h := NewXMindHandler()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unedfalse.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := sheets[0].ID
+	rootID := sheets[0].RootTopic.ID
+	tid := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rootID, "title": "Child",
+	})).ID
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic := findTopicByID(&sheets[0].RootTopic, tid)
+	if topic == nil {
+		t.Fatal("created topic missing")
+	}
+	if topic.TitleUnedited {
+		t.Fatalf("freshly created topic should persist titleUnedited=false, got %+v", topic)
+	}
+}
+
 func TestMoveTopicToPosition(t *testing.T) {
 	h := NewXMindHandler()
 	dir := t.TempDir()

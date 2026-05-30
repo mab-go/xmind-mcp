@@ -986,3 +986,43 @@ func TestGetTopicPropertiesMissingTopicID(t *testing.T) {
 		t.Fatal("expected tool error for missing topic_id")
 	}
 }
+
+// TestSetTopicPropertiesPreservesStructureClass pins issue #44 item 3: structureClass
+// must survive a mutating-handler write. Previously it was only ever read back from
+// the unmodified fixture, never across a handler-driven read/edit/write cycle. The
+// Sheet 10 root carries structureClass=org.xmind.ui.map.clockwise; an unrelated
+// SetTopicProperties edit must leave it intact.
+func TestSetTopicPropertiesPreservesStructureClass(t *testing.T) {
+	h := NewXMindHandler()
+	path := copyFixture(t, kitchenSinkPath(t))
+	sid := kitchenSinkSheetIDByTitle(t, kitchenSinkSheet10Title)
+	rootID := rootTopicIDForSheetTitle(t, kitchenSinkSheet10Title)
+
+	const wantStructureClass = "org.xmind.ui.map.clockwise"
+	before, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := findTopicByID(&findSheetByID(before, sid).RootTopic, rootID); root == nil || root.StructureClass != wantStructureClass {
+		t.Fatalf("fixture precondition: want structureClass %q on root, got %+v", wantStructureClass, root)
+	}
+
+	res := callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": rootID, "notes": "edited",
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+
+	after, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := findTopicByID(&findSheetByID(after, sid).RootTopic, rootID)
+	if root == nil {
+		t.Fatal("root topic missing after mutation")
+	}
+	if root.StructureClass != wantStructureClass {
+		t.Fatalf("structureClass not preserved across write: got %q want %q", root.StructureClass, wantStructureClass)
+	}
+}
