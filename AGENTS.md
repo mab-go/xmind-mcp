@@ -46,8 +46,9 @@ internal/
   xmind/
     types.go              — Go structs mirroring the content.json schema
     json_codec.go         — custom JSON: preserve unknown keys, notes shape
-    reader.go             — open zip, parse content.json → []Sheet
-    writer.go             — serialize []Sheet → content.json, write back to zip
+    reader.go             — open zip, parse content.json → []Sheet (ReadMap, parseContentFromZip)
+    writer.go             — serialize []Sheet → content.json, write back to zip (WriteMap, writeMapBody)
+    update.go             — OpenMapForUpdate/MapWriter: single-open read-then-commit handle for mutations
     atomic_replace.go     — replaceTempFile/replaceViaBackup: atomic replace (backup-restore on Windows)
     defaults.go           — DefaultTheme and DefaultSheetExtensions for new maps
     default_theme.json    — embedded default theme blob (sourced from kitchen-sink fixture)
@@ -104,6 +105,8 @@ Every mutating tool call follows this exact pattern — do not deviate from it:
 
 **Atomicity is required.** Always write to a temp file first and rename/swap on success. If a write fails mid-way, the original file must be left untouched. There is no session state and no temp files left behind on failure.
 
+**Single-open mutation path.** Mutating handlers open the `.xmind` once via `xmind.OpenMapForUpdate` (through the `statAndOpenMapForUpdate` / `loadSheet…ForUpdate` helpers), which returns the parsed `[]Sheet` plus a `*xmind.MapWriter` that keeps the zip reader open. The handler mutates the sheets in memory and calls `mw.Commit(sheets)` to persist them, raw-copying the still-open non-`content.json` entries (steps 1–5 above happen across one file open instead of two). `Commit` closes the read handle *before* the atomic swap, so on Windows the swap runs with no open handle on the original. `Commit` is single-use (a second `Commit`, or one after `Close`, errors). The free-standing `xmind.WriteMap` (which re-reads the file fresh) is retained for tests and any read-fresh caller; `xmind.CreateNewMap` writes brand-new maps. The temp-then-swap mechanics below are unchanged and shared by both `WriteMap` and `Commit` via the internal `writeMapBody`.
+
 The temp-then-swap happens in `replaceTempFile` (`internal/xmind/atomic_replace.go`). On Unix, `os.Rename` atomically replaces the destination. On Windows, `os.Rename` cannot overwrite an existing file, so `replaceViaBackup` moves the original aside to a uniquely named backup first, renames the temp into place, then removes the backup — restoring the backup if the rename fails. This keeps the original recoverable on Windows; never reintroduce a plain remove-then-rename there, which can destroy the original if the rename fails.
 
 ### `content.json` fidelity (unknown keys)
@@ -112,7 +115,7 @@ Major JSON object types in the workbook tree use custom `MarshalJSON` / `Unmarsh
 
 When you add a **new first-class field** to `Sheet`, `Topic`, `Children`, `Relationship`, `Boundary`, the summary-range `Summary`, `Marker`, `Position`, `TopicImage`, `AttributedTitleItem`, `Notes`, or `NoteContent`, you **must** add the JSON key to the corresponding allowlist in `json_codec.go` (e.g. `topicKnownKeys`, `sheetKnownKeys`, or the `deleteKeys(...)` list for that type — `Notes` uses `"plain"`/`"realHTML"`, `NoteContent` uses `"content"`). Otherwise the new field will be treated as opaque preserved data and will not populate the typed field.
 
-**Limitation:** Sibling keys on each **`Extension`** object (alongside `provider`, `content`, `resourceRefs`) are still dropped. Non–`content.json` zip entries continue to be preserved by `WriteMap` via raw copy.
+**Limitation:** Sibling keys on each **`Extension`** object (alongside `provider`, `content`, `resourceRefs`) are still dropped. Non–`content.json` zip entries continue to be preserved by `WriteMap` and `MapWriter.Commit` via raw copy.
 
 **String encoding:** When persisting `content.json`, use **`xmind.WriteMap`** / **`xmind.CreateNewMap`** only. They marshal with `encoding/json` HTML escaping disabled so characters such as `&`, `<`, and `>` appear literally in JSON strings (matching XMind on-disk files). Do not use `json.Marshal` on `[]Sheet` for that payload; default marshaling can rewrite `json.Marshaler` output in ways XMind mishandles.
 
@@ -169,12 +172,37 @@ if toolErr != nil {
 // statAndReadMap checks existence, reads the zip, and parses content.json.
 // toolErr is non-nil for caller-fixable conditions (file not found, bad zip).
 // err is non-nil for unexpected I/O or environment failures.
+// Use this in read-only handlers (find/list/get); it closes the file immediately.
 sheets, toolErr, err := statAndReadMap(absPath)
 if toolErr != nil {
     return toolErr, nil
 }
 if err != nil {
     return nil, err
+}
+```
+
+**Mutating handlers** instead use `statAndOpenMapForUpdate` (or the `loadSheet…ForUpdate`
+helpers in `mutate.go`), which open the file once and return a `*xmind.MapWriter` so the
+write reuses the same open handle (see Read/Write Lifecycle). The mandatory rule: `defer
+mw.Close()` **immediately** after the protocol-error check — before any branch that may
+return without committing (a sheet/topic-not-found tool error, or the no-change path in
+`FindAndReplace`). `mw.Close()` is idempotent and nil-safe (the open helpers return a nil
+writer on a file-not-found tool error, which `defer mw.Close()` tolerates), and it is a
+no-op after a successful `mw.Commit`.
+
+```go
+sheets, mw, toolErr, err := statAndOpenMapForUpdate(absPath)
+if err != nil {
+    return nil, err
+}
+defer func() { _ = mw.Close() }()
+if toolErr != nil {
+    return toolErr, nil
+}
+// …mutate sheets…
+if err := mw.Commit(sheets); err != nil {
+    return nil, fmt.Errorf("write map: %w", err)
 }
 ```
 

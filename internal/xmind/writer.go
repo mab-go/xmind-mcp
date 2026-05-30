@@ -141,8 +141,26 @@ func WriteMap(path string, sheets []Sheet) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = oldFile.Close() }()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = oldFile.Close()
+		}
+	}()
 
+	return writeMapBody(path, sheets, oldZR, func() error {
+		closed = true
+		return oldFile.Close()
+	})
+}
+
+// writeMapBody serializes sheets into a new content.json and writes a fresh .xmind zip
+// at a temp path, raw-copying every non-content.json entry from zr, then atomically
+// swaps it into path. releaseSource is invoked once the entry copy is complete (and
+// before the atomic swap) so the caller can close the source handle that backs zr;
+// this lets the swap run with no open handle on the original. On any failure the temp
+// file is removed and the original is left untouched.
+func writeMapBody(path string, sheets []Sheet, zr *zip.Reader, releaseSource func() error) error {
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
 		return fmt.Errorf("marshal content.json: %w", err)
@@ -154,16 +172,16 @@ func WriteMap(path string, sheets []Sheet) error {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	committed := false
+	swapped := false
 	defer func() {
-		if !committed {
+		if !swapped {
 			_ = os.Remove(tmpPath)
 		}
 	}()
 
 	zw := zip.NewWriter(tmp)
 
-	if err := copyZipEntriesExceptContentJSON(zw, oldZR); err != nil {
+	if err := copyZipEntriesExceptContentJSON(zw, zr); err != nil {
 		abortZipWriterAndFile(zw, tmp)
 		return err
 	}
@@ -173,10 +191,17 @@ func WriteMap(path string, sheets []Sheet) error {
 		return err
 	}
 
+	if releaseSource != nil {
+		if err := releaseSource(); err != nil {
+			abortZipWriterAndFile(zw, tmp)
+			return fmt.Errorf("close source handle: %w", err)
+		}
+	}
+
 	if err := finishZipTempFile(zw, tmp, tmpPath, path); err != nil {
 		return err
 	}
-	committed = true
+	swapped = true
 	return nil
 }
 

@@ -456,10 +456,11 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 		return perr, nil
 	}
 
-	sheets, sh, parent, mapErr, err := loadSheetAndParentTopic(absPath, sheetID, parentID)
+	sheets, mw, sh, parent, mapErr, err := loadSheetAndParentTopicForUpdate(absPath, sheetID, parentID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if mapErr != nil {
 		return mapErr, nil
 	}
@@ -476,7 +477,7 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 		return terr, nil
 	}
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return jsonResult(addTopicResponse{
@@ -514,10 +515,11 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 		return perr, nil
 	}
 
-	sheets, sh, tErr, err := loadSheetByID(absPath, sheetID)
+	sheets, mw, sh, tErr, err := loadSheetByIDForUpdate(absPath, sheetID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if tErr != nil {
 		return tErr, nil
 	}
@@ -538,7 +540,7 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 		return terr, nil
 	}
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return jsonResult(duplicateTopicResponse{
@@ -577,10 +579,11 @@ func (h *XMindHandler) AddTopicsBulk(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError("invalid argument topics: " + perr.Error()), nil
 	}
 
-	sheets, sh, parent, mapErr, err := loadSheetAndParentTopic(absPath, sheetID, parentID)
+	sheets, mw, sh, parent, mapErr, err := loadSheetAndParentTopicForUpdate(absPath, sheetID, parentID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if mapErr != nil {
 		return mapErr, nil
 	}
@@ -593,7 +596,7 @@ func (h *XMindHandler) AddTopicsBulk(ctx context.Context, req mcp.CallToolReques
 		rootIDs[i] = topics[i].ID
 	}
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return jsonResult(addTopicsBulkResponse{
@@ -626,10 +629,11 @@ func (h *XMindHandler) RenameTopic(ctx context.Context, req mcp.CallToolRequest)
 		return terr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
@@ -645,7 +649,7 @@ func (h *XMindHandler) RenameTopic(ctx context.Context, req mcp.CallToolRequest)
 	topic.Title = title
 	topic.TitleUnedited = false
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("renamed topic %s", topicID)), nil
@@ -680,10 +684,11 @@ func (h *XMindHandler) DeleteTopic(ctx context.Context, req mcp.CallToolRequest)
 		return terr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
@@ -695,7 +700,7 @@ func (h *XMindHandler) DeleteTopic(ctx context.Context, req mcp.CallToolRequest)
 		return rerr, nil
 	}
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("deleted topic %s", topicID)), nil
@@ -771,10 +776,11 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 		return aerr, nil
 	}
 
-	sheets, sh, topic, _, ctxErr, err := loadSheetMoveSubjects(absPath, sheetID, topicID, newParentID)
+	sheets, mw, sh, topic, ctxErr, err := loadSheetMoveSubjectsForUpdate(absPath, sheetID, topicID, newParentID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if ctxErr != nil {
 		return ctxErr, nil
 	}
@@ -793,7 +799,7 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 	}
 
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return jsonResult(moveTopicResponse{
@@ -804,27 +810,12 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 	})
 }
 
-func loadSheetParentTopic(absPath, sheetID, parentID string) ([]xmind.Sheet, *xmind.Sheet, *xmind.Topic, *mcp.CallToolResult, error) {
-	sheets, toolErr2, err := statAndReadMap(absPath)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	if toolErr2 != nil {
-		return nil, nil, nil, toolErr2, nil
-	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return sheets, nil, nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	parent := findTopicByID(&sh.RootTopic, parentID)
-	if parent == nil {
-		return sheets, sh, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
-	}
-	return sheets, sh, parent, nil, nil
-}
-
-func loadSheetMoveSubjects(absPath, sheetID, topicID, newParentID string) ([]xmind.Sheet, *xmind.Sheet, *xmind.Topic, *xmind.Topic, *mcp.CallToolResult, error) {
-	sheets, toolErr2, err := statAndReadMap(absPath)
+// loadSheetMoveSubjectsForUpdate opens the map for update, resolves the moved topic, and
+// validates that newParentID exists. The resolved new-parent pointer is intentionally not
+// returned: detachTopicFromTree can invalidate it, so MoveTopic re-resolves it after the
+// detach via attachDetachedToParent. The Close contract matches loadSheetByIDForUpdate.
+func loadSheetMoveSubjectsForUpdate(absPath, sheetID, topicID, newParentID string) ([]xmind.Sheet, *xmind.MapWriter, *xmind.Sheet, *xmind.Topic, *mcp.CallToolResult, error) {
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
@@ -833,17 +824,16 @@ func loadSheetMoveSubjects(absPath, sheetID, topicID, newParentID string) ([]xmi
 	}
 	sh := findSheetByID(sheets, sheetID)
 	if sh == nil {
-		return sheets, nil, nil, nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+		return sheets, mw, nil, nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
 	}
 	topic := findTopicByID(&sh.RootTopic, topicID)
 	if topic == nil {
-		return sheets, sh, nil, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
+		return sheets, mw, sh, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
 	}
-	newParent := findTopicByID(&sh.RootTopic, newParentID)
-	if newParent == nil {
-		return sheets, sh, topic, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", newParentID)), nil
+	if findTopicByID(&sh.RootTopic, newParentID) == nil {
+		return sheets, mw, sh, topic, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", newParentID)), nil
 	}
-	return sheets, sh, topic, newParent, nil, nil
+	return sheets, mw, sh, topic, nil, nil
 }
 
 func parseOrderedIDs(rawIDs []any) ([]string, *mcp.CallToolResult) {
@@ -920,10 +910,11 @@ func (h *XMindHandler) ReorderChildren(ctx context.Context, req mcp.CallToolRequ
 		return aerr, nil
 	}
 
-	sheets, sh, parent, ctxErr, err := loadSheetParentTopic(absPath, sheetID, parentID)
+	sheets, mw, sh, parent, ctxErr, err := loadSheetAndParentTopicForUpdate(absPath, sheetID, parentID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if ctxErr != nil {
 		return ctxErr, nil
 	}
@@ -934,7 +925,7 @@ func (h *XMindHandler) ReorderChildren(ctx context.Context, req mcp.CallToolRequ
 
 	parent.Children.Attached = newOrder
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("reordered %d children under %s", len(newOrder), parentID)), nil
@@ -1174,36 +1165,40 @@ func resolveTopicsForSheet(root *xmind.Topic, topicIDs []string) ([]*xmind.Topic
 	return topics, nil
 }
 
-// loadSheetByID reads the map and returns the sheet with sheetID, or a tool/protocol error.
-func loadSheetByID(absPath, sheetID string) ([]xmind.Sheet, *xmind.Sheet, *mcp.CallToolResult, error) {
-	sheets, toolErr2, err := statAndReadMap(absPath)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if toolErr2 != nil {
-		return nil, nil, toolErr2, nil
-	}
-	sh := findSheetByID(sheets, sheetID)
-	if sh == nil {
-		return nil, nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
-	}
-	return sheets, sh, nil, nil
-}
-
-// loadSheetAndParentTopic loads the map and resolves parentID under the sheet root.
-func loadSheetAndParentTopic(absPath, sheetID, parentID string) ([]xmind.Sheet, *xmind.Sheet, *xmind.Topic, *mcp.CallToolResult, error) {
-	sheets, sh, tErr, err := loadSheetByID(absPath, sheetID)
+// loadSheetByIDForUpdate opens the map for update and resolves the sheet with sheetID.
+// The caller must defer mw.Close() right after the err check. mw is non-nil for a post-open
+// tool error (sheet not found) and nil when the open itself failed (a file-not-found tool
+// error or a protocol error); mw.Close is nil-safe, so the defer is safe either way.
+func loadSheetByIDForUpdate(absPath, sheetID string) ([]xmind.Sheet, *xmind.MapWriter, *xmind.Sheet, *mcp.CallToolResult, error) {
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	if toolErr2 != nil {
+		return nil, nil, nil, toolErr2, nil
+	}
+	sh := findSheetByID(sheets, sheetID)
+	if sh == nil {
+		return sheets, mw, nil, mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
+	}
+	return sheets, mw, sh, nil, nil
+}
+
+// loadSheetAndParentTopicForUpdate opens the map for update and resolves parentID under the
+// sheet root. The same Close contract as loadSheetByIDForUpdate applies.
+func loadSheetAndParentTopicForUpdate(absPath, sheetID, parentID string) ([]xmind.Sheet, *xmind.MapWriter, *xmind.Sheet, *xmind.Topic, *mcp.CallToolResult, error) {
+	sheets, mw, sh, tErr, err := loadSheetByIDForUpdate(absPath, sheetID)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
 	if tErr != nil {
-		return nil, nil, nil, tErr, nil
+		return sheets, mw, nil, nil, tErr, nil
 	}
 	parent := findTopicByID(&sh.RootTopic, parentID)
 	if parent == nil {
-		return sheets, sh, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
+		return sheets, mw, sh, nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", parentID)), nil
 	}
-	return sheets, sh, parent, nil, nil
+	return sheets, mw, sh, parent, nil, nil
 }
 
 func parseBulkTopicsArray(args map[string]any) ([]any, *mcp.CallToolResult) {
@@ -1284,10 +1279,11 @@ func (h *XMindHandler) SetTopicProperties(ctx context.Context, req mcp.CallToolR
 		return terr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
@@ -1305,7 +1301,7 @@ func (h *XMindHandler) SetTopicProperties(ctx context.Context, req mcp.CallToolR
 	}
 
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("updated topic %s", topicID)), nil
@@ -1333,10 +1329,11 @@ func (h *XMindHandler) SetTopicPropertiesBulk(ctx context.Context, req mcp.CallT
 		return mcp.NewToolResultError("missing property updates: provide at least one of notes, labels, markers, remove_markers, or link"), nil
 	}
 
-	sheets, sh, sheetErr, err := loadSheetByID(absPath, sheetID)
+	sheets, mw, sh, sheetErr, err := loadSheetByIDForUpdate(absPath, sheetID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if sheetErr != nil {
 		return sheetErr, nil
 	}
@@ -1351,7 +1348,7 @@ func (h *XMindHandler) SetTopicPropertiesBulk(ctx context.Context, req mcp.CallT
 	}
 
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("updated %d topics", len(topicIDs))), nil
@@ -1374,10 +1371,11 @@ func (h *XMindHandler) AddFloatingTopic(ctx context.Context, req mcp.CallToolReq
 		return terr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
@@ -1398,7 +1396,7 @@ func (h *XMindHandler) AddFloatingTopic(ctx context.Context, req mcp.CallToolReq
 	ch := ensureChildren(root)
 	ch.Detached = append(ch.Detached, topic)
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("added floating topic id %s", topic.ID)), nil
@@ -1429,10 +1427,11 @@ func (h *XMindHandler) AddRelationship(ctx context.Context, req mcp.CallToolRequ
 		return oerr, nil
 	}
 
-	sheets, sh, tErr, err := loadSheetByID(absPath, sheetID)
+	sheets, mw, sh, tErr, err := loadSheetByIDForUpdate(absPath, sheetID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if tErr != nil {
 		return tErr, nil
 	}
@@ -1442,7 +1441,7 @@ func (h *XMindHandler) AddRelationship(ctx context.Context, req mcp.CallToolRequ
 
 	relID := appendRelationship(sh, fromID, toID, label)
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("added relationship id %s", relID)), nil
@@ -1465,10 +1464,11 @@ func (h *XMindHandler) DeleteRelationship(ctx context.Context, req mcp.CallToolR
 		return terr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
@@ -1483,7 +1483,7 @@ func (h *XMindHandler) DeleteRelationship(ctx context.Context, req mcp.CallToolR
 	}
 	sh.Relationships = slices.Delete(sh.Relationships, idx, idx+1)
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("deleted relationship id %s", relationshipID)), nil
@@ -1515,10 +1515,11 @@ func (h *XMindHandler) AddSummary(ctx context.Context, req mcp.CallToolRequest) 
 		return oerr, nil
 	}
 
-	sheets, sh, parent, mapErr, err := loadSheetAndParentTopic(absPath, sheetID, parentID)
+	sheets, mw, sh, parent, mapErr, err := loadSheetAndParentTopicForUpdate(absPath, sheetID, parentID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if mapErr != nil {
 		return mapErr, nil
 	}
@@ -1529,7 +1530,7 @@ func (h *XMindHandler) AddSummary(ctx context.Context, req mcp.CallToolRequest) 
 	summaryTopicID := applyAddSummary(parent, fromIdx, toIdx, title)
 
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("added summary topic id %s", summaryTopicID)), nil
@@ -1556,10 +1557,11 @@ func (h *XMindHandler) AddBoundary(ctx context.Context, req mcp.CallToolRequest)
 		return oerr, nil
 	}
 
-	sheets, sh, parent, mapErr, err := loadSheetAndParentTopic(absPath, sheetID, parentID)
+	sheets, mw, sh, parent, mapErr, err := loadSheetAndParentTopicForUpdate(absPath, sheetID, parentID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if mapErr != nil {
 		return mapErr, nil
 	}
@@ -1576,7 +1578,7 @@ func (h *XMindHandler) AddBoundary(ctx context.Context, req mcp.CallToolRequest)
 	parent.Boundaries = append(parent.Boundaries, b)
 
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("added boundary id %s", boundaryID)), nil
