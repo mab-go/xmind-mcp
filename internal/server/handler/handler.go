@@ -310,6 +310,21 @@ func absPathFromArgs(args map[string]any) (abs string, toolErr *mcp.CallToolResu
 	return absPath, nil
 }
 
+// optionalString reads args[key] when present. Returns present=false when the key
+// is absent or null. It errors only on a non-string value; an empty string is
+// returned as-is (present=true) for the caller to interpret (default vs. reject).
+func optionalString(args map[string]any, key string) (val string, present bool, toolErr *mcp.CallToolResult) {
+	v, has := args[key]
+	if !has || v == nil {
+		return "", false, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", false, mcp.NewToolResultError("invalid argument " + key + ": expected a string")
+	}
+	return s, true, nil
+}
+
 // statAndReadMap checks that absPath exists, reads the workbook, and maps I/O and parse failures
 // to tool errors vs protocol errors per 00-OVERVIEW.
 func statAndReadMap(absPath string) (sheets []xmind.Sheet, toolErr *mcp.CallToolResult, err error) {

@@ -244,18 +244,17 @@ func (h *XMindHandler) CreateMap(ctx context.Context, req mcp.CallToolRequest) (
 		return toolErr, nil
 	}
 
-	rawRoot, ok := args["root_title"]
-	if !ok {
-		return mcp.NewToolResultError("missing required argument: root_title"), nil
-	}
-	rootTitle, ok := rawRoot.(string)
-	if !ok || rootTitle == "" {
-		return mcp.NewToolResultError("invalid argument root_title: expected a non-empty string"), nil
+	rootTitle, terr := requireString(args, "root_title")
+	if terr != nil {
+		return terr, nil
 	}
 
-	sheetTitle := "Sheet 1"
-	if v, ok := args["sheet_title"].(string); ok && v != "" {
-		sheetTitle = v
+	sheetTitle, present, terr := optionalString(args, "sheet_title")
+	if terr != nil {
+		return terr, nil
+	}
+	if !present || sheetTitle == "" {
+		sheetTitle = "Sheet 1"
 	}
 
 	if _, err := os.Stat(absPath); err == nil {
@@ -318,13 +317,9 @@ func (h *XMindHandler) DeleteSheet(ctx context.Context, req mcp.CallToolRequest)
 		return toolErr, nil
 	}
 
-	rawID, ok := args["sheet_id"]
-	if !ok {
-		return mcp.NewToolResultError("missing required argument: sheet_id"), nil
-	}
-	sheetID, ok := rawID.(string)
-	if !ok || sheetID == "" {
-		return mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string"), nil
+	sheetID, terr := requireString(args, "sheet_id")
+	if terr != nil {
+		return terr, nil
 	}
 
 	sheets, toolErr2, err := statAndReadMap(absPath)
