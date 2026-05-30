@@ -135,33 +135,18 @@ func parseBoolOptional(args map[string]any, key string) (bool, *mcp.CallToolResu
 	return false, nil
 }
 
-// requireSheetIDFromArgs reads and validates args["sheet_id"] like GetSubtree/FindTopic.
-func requireSheetIDFromArgs(args map[string]any) (sheetID string, toolErr *mcp.CallToolResult) {
-	rawSheet, ok := args["sheet_id"]
-	if !ok {
-		return "", mcp.NewToolResultError("missing required argument: sheet_id")
-	}
-	sid, ok := rawSheet.(string)
-	if !ok || sid == "" {
-		return "", mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string")
-	}
-	return sid, nil
-}
-
 // getSubtreeRootFromArgs resolves the subtree root from optional topic_id (empty string = sheet root).
 func getSubtreeRootFromArgs(sh *xmind.Sheet, args map[string]any) (root *xmind.Topic, toolErr *mcp.CallToolResult) {
-	if v, has := args["topic_id"]; has && v != nil {
-		rawTopic, ok := v.(string)
-		if !ok {
-			return nil, mcp.NewToolResultError("invalid argument topic_id: expected a string")
+	id, present, terr := optionalString(args, "topic_id")
+	if terr != nil {
+		return nil, terr
+	}
+	if present && id != "" {
+		t := findTopicByID(&sh.RootTopic, id)
+		if t == nil {
+			return nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", id))
 		}
-		if rawTopic != "" {
-			t := findTopicByID(&sh.RootTopic, rawTopic)
-			if t == nil {
-				return nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", rawTopic))
-			}
-			return t, nil
-		}
+		return t, nil
 	}
 	return &sh.RootTopic, nil
 }
@@ -210,7 +195,7 @@ func (h *XMindHandler) GetSubtree(ctx context.Context, req mcp.CallToolRequest) 
 		return toolErr, nil
 	}
 
-	sheetID, serr := requireSheetIDFromArgs(args)
+	sheetID, serr := requireString(args, "sheet_id")
 	if serr != nil {
 		return serr, nil
 	}
@@ -259,9 +244,12 @@ type searchTopicItem struct {
 
 // searchSheetsScopeFromArgs returns sheets to search and whether to attach sheet metadata per match.
 func searchSheetsScopeFromArgs(sheets []xmind.Sheet, args map[string]any) (toSearch []xmind.Sheet, includeSheetMetadata bool, toolErr *mcp.CallToolResult) {
-	if raw, has := args["sheet_id"]; has && raw != nil {
-		sheetID, ok := raw.(string)
-		if !ok || sheetID == "" {
+	sheetID, present, terr := optionalString(args, "sheet_id")
+	if terr != nil {
+		return nil, false, terr
+	}
+	if present {
+		if sheetID == "" {
 			return nil, false, mcp.NewToolResultError("invalid argument sheet_id: expected a non-empty string")
 		}
 		sh := findSheetByID(sheets, sheetID)
@@ -309,16 +297,9 @@ func (h *XMindHandler) SearchTopics(ctx context.Context, req mcp.CallToolRequest
 		return toolErr, nil
 	}
 
-	rawQuery, ok := args["query"]
-	if !ok {
-		return mcp.NewToolResultError("missing required argument: query"), nil
-	}
-	query, ok := rawQuery.(string)
-	if !ok {
-		return mcp.NewToolResultError("invalid argument query: expected a string"), nil
-	}
-	if query == "" {
-		return mcp.NewToolResultError("invalid argument query: expected a non-empty string"), nil
+	query, terr := requireString(args, "query")
+	if terr != nil {
+		return terr, nil
 	}
 
 	sheets, toolErr2, err := statAndReadMap(absPath)
@@ -410,11 +391,11 @@ func childTitlesInWalkOrder(t *xmind.Topic) []string {
 
 // findTopicSearchRoot returns the topic at which to start the FindTopic walk (sheet root or parent_id subtree).
 func findTopicSearchRoot(sh *xmind.Sheet, args map[string]any) (searchRoot *xmind.Topic, toolErr *mcp.CallToolResult) {
-	if v, has := args["parent_id"]; has && v != nil {
-		pid, ok := v.(string)
-		if !ok {
-			return nil, mcp.NewToolResultError("invalid argument parent_id: expected a string")
-		}
+	pid, present, terr := optionalString(args, "parent_id")
+	if terr != nil {
+		return nil, terr
+	}
+	if present {
 		if pid == "" {
 			return nil, mcp.NewToolResultError("invalid argument parent_id: expected a non-empty string")
 		}
@@ -425,21 +406,6 @@ func findTopicSearchRoot(sh *xmind.Sheet, args map[string]any) (searchRoot *xmin
 		return topic, nil
 	}
 	return &sh.RootTopic, nil
-}
-
-func requireFindTopicTitleArgs(args map[string]any) (wantTitle string, toolErr *mcp.CallToolResult) {
-	rawTitle, ok := args["title"]
-	if !ok {
-		return "", mcp.NewToolResultError("missing required argument: title")
-	}
-	title, ok := rawTitle.(string)
-	if !ok {
-		return "", mcp.NewToolResultError("invalid argument title: expected a string")
-	}
-	if title == "" {
-		return "", mcp.NewToolResultError("invalid argument title: expected a non-empty string")
-	}
-	return title, nil
 }
 
 func findFirstTopicByExactTitle(searchRoot *xmind.Topic, wantTitle string) (found *xmind.Topic, foundParent *xmind.Topic) {
@@ -498,12 +464,12 @@ func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (
 		return toolErr, nil
 	}
 
-	sheetID, serr := requireSheetIDFromArgs(args)
+	sheetID, serr := requireString(args, "sheet_id")
 	if serr != nil {
 		return serr, nil
 	}
 
-	wantTitle, terr := requireFindTopicTitleArgs(args)
+	wantTitle, terr := requireString(args, "title")
 	if terr != nil {
 		return terr, nil
 	}

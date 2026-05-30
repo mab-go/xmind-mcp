@@ -178,12 +178,31 @@ if err != nil {
 }
 ```
 
-For additional non-path arguments (string, int, bool), extract them directly from `args` after the path helpers:
+For additional non-path arguments, use the shared extraction helpers rather than inlining `args[...]` lookups and type assertions. Each returns a `*mcp.CallToolResult` tool error you forward with `if … != nil { return …, nil }`:
+
+| Helper | Location | Semantics |
+|---|---|---|
+| `requireString(args, key)` | `mutate.go` | Required string; rejects missing, non-string, and empty. |
+| `stringArgAllowEmpty(args, key)` | `utils.go` | Required string; rejects missing and non-string, but permits empty. |
+| `requireNonNegativeInt(args, key)` | `mutate.go` | Required whole number ≥ 0 (accepts JSON `float64` or `int`). |
+| `optionalString(args, key)` | `handler.go` | Optional string → `(val, present, toolErr)`. `present=false` when absent/null; errors only on a non-string value; empty string is returned as-is for the caller to interpret (default vs. reject). |
 
 ```go
-title, _ := args["title"].(string)
-if title == "" {
-    return mcp.NewToolResultError("missing required argument: title"), nil
+title, terr := requireString(args, "title")
+if terr != nil {
+    return terr, nil
+}
+```
+
+For an optional argument with a default, let the caller decide what empty means:
+
+```go
+sheetTitle, present, terr := optionalString(args, "sheet_title")
+if terr != nil {
+    return terr, nil
+}
+if !present || sheetTitle == "" {
+    sheetTitle = "Sheet 1"
 }
 ```
 
