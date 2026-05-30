@@ -141,16 +141,17 @@ func WriteMap(path string, sheets []Sheet) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = oldFile.Close() }()
 
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
+		_ = oldFile.Close()
 		return fmt.Errorf("marshal content.json: %w", err)
 	}
 
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".xmind-tmp-*")
 	if err != nil {
+		_ = oldFile.Close()
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
@@ -165,12 +166,24 @@ func WriteMap(path string, sheets []Sheet) error {
 
 	if err := copyZipEntriesExceptContentJSON(zw, oldZR); err != nil {
 		abortZipWriterAndFile(zw, tmp)
+		_ = oldFile.Close()
 		return err
 	}
 
 	if err := writeZipBytes(zw, "content.json", data); err != nil {
 		abortZipWriterAndFile(zw, tmp)
+		_ = oldFile.Close()
 		return err
+	}
+
+	// Close the original file BEFORE atomic replace.
+	// On Windows, os.Rename refuses to touch a file that still has an open
+	// handle (ERROR_SHARING_VIOLATION). The deferred-close approach works on
+	// Unix (inode-based rename), but on Windows it fires too late — after
+	// replaceTempFile has already attempted the rename.
+	if err := oldFile.Close(); err != nil {
+		abortZipWriterAndFile(zw, tmp)
+		return fmt.Errorf("close old file: %w", err)
 	}
 
 	if err := finishZipTempFile(zw, tmp, tmpPath, path); err != nil {

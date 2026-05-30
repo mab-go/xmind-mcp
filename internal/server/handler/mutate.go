@@ -490,7 +490,8 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 // for a caller-fixable dangling summary reference (the source map opened fine), a protocol error
 // otherwise (nil root / JSON round-trip failures are genuine internal faults).
 func duplicateCloneFailure(err error) (*mcp.CallToolResult, error) {
-	if dangErr, ok := errors.AsType[*cloneDanglingSummaryRefError](err); ok {
+	var dangErr *cloneDanglingSummaryRefError
+	if errors.As(err, &dangErr) {
 		return mcp.NewToolResultError(dangErr.Error()), nil
 	}
 	return nil, fmt.Errorf("duplicate topic: %w", err)
