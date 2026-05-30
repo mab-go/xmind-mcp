@@ -191,6 +191,101 @@ func TestIntegration_KitchenSinkPreservation(t *testing.T) {
 	}
 }
 
+// Sheet 14 - Visual Styling carries topics with an unknown sibling key ("style")
+// that is not a typed field, so it round-trips only through the codec's extra bag.
+const (
+	kitchenSinkSheet14Title         = "Sheet 14 - Visual Styling"
+	kitchenSinkSheet14StyledTopicID = "12a82da7-a772-4358-b68c-ffed1100ed7d"
+)
+
+// rawTopicByID parses content.json bytes and returns the topic object with the
+// given id (searching attached/detached/summary), or nil if absent.
+func rawTopicByID(t *testing.T, raw []byte, id string) map[string]any {
+	t.Helper()
+	var sheets []map[string]any
+	if err := json.Unmarshal(raw, &sheets); err != nil {
+		t.Fatalf("unmarshal content.json: %v", err)
+	}
+	var search func(topic map[string]any) map[string]any
+	search = func(topic map[string]any) map[string]any {
+		if topic == nil {
+			return nil
+		}
+		if topic["id"] == id {
+			return topic
+		}
+		children, _ := topic["children"].(map[string]any)
+		for _, key := range []string{"attached", "detached", "summary"} {
+			list, _ := children[key].([]any)
+			for _, c := range list {
+				cm, _ := c.(map[string]any)
+				if found := search(cm); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+	for _, sh := range sheets {
+		rt, _ := sh["rootTopic"].(map[string]any)
+		if found := search(rt); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// TestIntegration_EditedTopicPreservesUnknownKeys closes the gap where no test
+// asserted preserved data survives on the *edited* topic itself. It mutates a
+// Sheet 14 topic that carries an unknown sibling key ("style"), then re-reads the
+// raw content.json and asserts both that the mutation applied and that the
+// unknown key survived unchanged on that same topic.
+func TestIntegration_EditedTopicPreservesUnknownKeys(t *testing.T) {
+	h := NewXMindHandler()
+	path := copyFixture(t, kitchenSinkPath(t))
+	sid := kitchenSinkSheetIDByTitle(t, kitchenSinkSheet14Title)
+
+	before := rawTopicByID(t, readZipContentJSON(t, path), kitchenSinkSheet14StyledTopicID)
+	if before == nil {
+		t.Fatalf("styled topic %s not found before mutation", kitchenSinkSheet14StyledTopicID)
+	}
+	styleBefore, ok := before["style"]
+	if !ok {
+		t.Fatal("fixture topic should carry an unknown \"style\" key before mutation")
+	}
+	wantStyle, err := json.Marshal(styleBefore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := callTool(t, h.SetTopicProperties, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": kitchenSinkSheet14StyledTopicID,
+		"notes": "edited",
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+
+	after := rawTopicByID(t, readZipContentJSON(t, path), kitchenSinkSheet14StyledTopicID)
+	if after == nil {
+		t.Fatalf("styled topic %s not found after mutation", kitchenSinkSheet14StyledTopicID)
+	}
+	if after["notes"] == nil {
+		t.Fatal("expected notes mutation to be applied to the edited topic")
+	}
+	styleAfter, ok := after["style"]
+	if !ok {
+		t.Fatal("unknown \"style\" key was dropped from the edited topic")
+	}
+	gotStyle, err := json.Marshal(styleAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotStyle) != string(wantStyle) {
+		t.Fatalf("unknown \"style\" key changed across edit:\n before: %s\n after:  %s", wantStyle, gotStyle)
+	}
+}
+
 func assertTopicTitleNotesLabels(t *testing.T, topic *xmind.Topic, wantTitle, wantNote string) {
 	t.Helper()
 	if topic == nil {

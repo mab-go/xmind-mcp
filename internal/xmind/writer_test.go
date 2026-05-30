@@ -3,6 +3,7 @@ package xmind
 import (
 	"archive/zip"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -127,6 +128,7 @@ func TestWriteMapAtomicSafetyOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before := fileSHA256(t, dst)
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
@@ -134,6 +136,52 @@ func TestWriteMapAtomicSafetyOnFailure(t *testing.T) {
 	err = WriteMap(dst, sheets)
 	if err == nil {
 		t.Fatal("expected WriteMap to fail when temp dir is not writable")
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".xmind-tmp-") {
+			t.Fatalf("leaked temp file: %s", e.Name())
+		}
+	}
+	if after := fileSHA256(t, dst); after != before {
+		t.Fatalf("original file changed after a failed write: before %s, after %s", before, after)
+	}
+}
+
+// TestWriteMapPreservesOriginalOnSwapFailure exercises the full atomic path: the
+// temp file is written successfully, but the final swap-into-place fails. The
+// original destination must be left byte-identical and no temp residue may
+// remain. The chmod-based test above blocks temp-file creation, so the swap step
+// never runs there; this test forces a failure at the swap by injecting a rename
+// error via the osRename seam.
+func TestWriteMapPreservesOriginalOnSwapFailure(t *testing.T) {
+	src := kitchenSinkPath(t)
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "k.xmind")
+	if err := copyFile(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	sheets, err := ReadMap(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := fileSHA256(t, dst)
+
+	orig := osRename
+	t.Cleanup(func() { osRename = orig })
+	osRename = func(string, string) error {
+		return errors.New("injected swap failure")
+	}
+
+	if err := WriteMap(dst, sheets); err == nil {
+		t.Fatal("expected WriteMap to fail when the swap rename fails")
+	}
+
+	if after := fileSHA256(t, dst); after != before {
+		t.Fatalf("original file changed after a failed swap: before %s, after %s", before, after)
 	}
 	ents, err := os.ReadDir(dir)
 	if err != nil {
