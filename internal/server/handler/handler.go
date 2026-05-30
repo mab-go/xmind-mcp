@@ -340,3 +340,22 @@ func statAndReadMap(absPath string) (sheets []xmind.Sheet, toolErr *mcp.CallTool
 	}
 	return sheets, nil, nil
 }
+
+// statAndOpenMapForUpdate is the mutating-handler counterpart to statAndReadMap: it
+// checks that absPath exists, opens the workbook once, and returns a MapWriter that holds
+// the zip open for a subsequent mw.Commit. Error mapping matches statAndReadMap. Callers
+// MUST defer mw.Close() immediately after a nil-error return, before any branch that may
+// return without committing (e.g. a sheet-not-found tool error or a no-change path).
+func statAndOpenMapForUpdate(absPath string) (sheets []xmind.Sheet, mw *xmind.MapWriter, toolErr *mcp.CallToolResult, err error) {
+	if _, statErr := os.Stat(absPath); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil, nil, mcp.NewToolResultError(fmt.Sprintf("file not found: %s", absPath)), nil
+		}
+		return nil, nil, nil, fmt.Errorf("stat file: %w", statErr)
+	}
+	sheets, mw, openErr := xmind.OpenMapForUpdate(absPath)
+	if openErr != nil {
+		return nil, nil, mcp.NewToolResultError(openErr.Error()), nil
+	}
+	return sheets, mw, nil, nil
+}

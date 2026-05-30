@@ -290,10 +290,11 @@ func (h *XMindHandler) AddSheet(ctx context.Context, req mcp.CallToolRequest) (*
 		return terr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
@@ -301,7 +302,7 @@ func (h *XMindHandler) AddSheet(ctx context.Context, req mcp.CallToolRequest) (*
 	bumpAllSheetsRevisionID(sheets)
 	sh := newSheet(sheetTitle, rootTitle)
 	sheets = append(sheets, sh)
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 
@@ -322,10 +323,11 @@ func (h *XMindHandler) DeleteSheet(ctx context.Context, req mcp.CallToolRequest)
 		return terr, nil
 	}
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
@@ -341,7 +343,7 @@ func (h *XMindHandler) DeleteSheet(ctx context.Context, req mcp.CallToolRequest)
 
 	sheets = slices.Delete(sheets, idx, idx+1)
 	bumpAllSheetsRevisionID(sheets)
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 

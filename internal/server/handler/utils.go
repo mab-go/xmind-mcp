@@ -176,18 +176,19 @@ func (h *XMindHandler) ImportFromOutline(ctx context.Context, req mcp.CallToolRe
 
 	normalizeOutlineDepths(pairs)
 
-	sheets, toolErr2, err := statAndReadMap(absPath)
+	sheets, mw, toolErr2, err := statAndOpenMapForUpdate(absPath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
 
 	if sheetIDArg == "" {
-		return importOutlineNewSheet(absPath, sheets, pairs)
+		return importOutlineNewSheet(mw, sheets, pairs)
 	}
-	return importOutlineAppend(absPath, sheets, sheetIDArg, parentIDArg, pairs)
+	return importOutlineAppend(mw, sheets, sheetIDArg, parentIDArg, pairs)
 }
 
 func parseImportOutlineSheetArgs(args map[string]any) (sheetID, parentID string, toolErr *mcp.CallToolResult) {
@@ -204,7 +205,7 @@ func parseImportOutlineSheetArgs(args map[string]any) (sheetID, parentID string,
 }
 
 // importOutlineNewSheet: single tree; first line is sheet+root title; extra depth-0 lines are children of root.
-func importOutlineNewSheet(absPath string, sheets []xmind.Sheet, pairs []outlinePair) (*mcp.CallToolResult, error) {
+func importOutlineNewSheet(mw *xmind.MapWriter, sheets []xmind.Sheet, pairs []outlinePair) (*mcp.CallToolResult, error) {
 	root := buildOutlineTreeSingleRoot(pairs)
 	if root == nil {
 		return mcp.NewToolResultError("could not build outline tree"), nil
@@ -216,14 +217,14 @@ func importOutlineNewSheet(absPath string, sheets []xmind.Sheet, pairs []outline
 		ch.Attached = append(ch.Attached, outlineNodeToTopics(c))
 	}
 	sheets = append(sheets, sh)
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	n := countTopics(&sh.RootTopic)
 	return textResult(fmt.Sprintf("imported %d topics into new sheet id %s", n, sh.ID)), nil
 }
 
-func importOutlineAppend(absPath string, sheets []xmind.Sheet, sheetID, parentID string, pairs []outlinePair) (*mcp.CallToolResult, error) {
+func importOutlineAppend(mw *xmind.MapWriter, sheets []xmind.Sheet, sheetID, parentID string, pairs []outlinePair) (*mcp.CallToolResult, error) {
 	sh := findSheetByID(sheets, sheetID)
 	if sh == nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
@@ -246,7 +247,7 @@ func importOutlineAppend(absPath string, sheets []xmind.Sheet, sheetID, parentID
 		total += countTopics(&t)
 	}
 	sh.RevisionID = uuid.New().String()
-	if err := xmind.WriteMap(absPath, sheets); err != nil {
+	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("imported %d topics", total)), nil
@@ -550,16 +551,21 @@ func parseFindAndReplaceInputs(args map[string]any) (absPath, findStr, replaceSt
 	return absPath, findStr, replaceStr, exact, toolErr
 }
 
-func findAndReplaceLoadSheets(absPath string, args map[string]any) (sheets []xmind.Sheet, sheetsToUpdate []*xmind.Sheet, toolErr *mcp.CallToolResult, err error) {
-	sheets, toolErr, err = statAndReadMap(absPath)
+// findAndReplaceLoadSheets opens the map for update and resolves the sheets to scan.
+// The caller must defer mw.Close() right after the err check (FindAndReplace may finish
+// without committing when there are no changes). mw is non-nil for a post-open tool error
+// and nil when the open itself failed (a file-not-found tool error or a protocol error);
+// mw.Close is nil-safe, so the defer is safe either way.
+func findAndReplaceLoadSheets(absPath string, args map[string]any) (sheets []xmind.Sheet, mw *xmind.MapWriter, sheetsToUpdate []*xmind.Sheet, toolErr *mcp.CallToolResult, err error) {
+	sheets, mw, toolErr, err = statAndOpenMapForUpdate(absPath)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if toolErr != nil {
-		return nil, nil, toolErr, nil
+		return nil, nil, nil, toolErr, nil
 	}
 	sheetsToUpdate, toolErr = sheetsToUpdateForFindReplace(args, sheets)
-	return sheets, sheetsToUpdate, toolErr, nil
+	return sheets, mw, sheetsToUpdate, toolErr, nil
 }
 
 func findReplaceRunOnSheets(sheetsToUpdate []*xmind.Sheet, findStr, replaceStr string, exact bool) []findReplaceChange {
@@ -575,7 +581,7 @@ func findReplaceRunOnSheets(sheetsToUpdate []*xmind.Sheet, findStr, replaceStr s
 	return changes
 }
 
-func finishFindReplace(absPath string, sheets []xmind.Sheet, changes []findReplaceChange) (*mcp.CallToolResult, error) {
+func finishFindReplace(mw *xmind.MapWriter, sheets []xmind.Sheet, changes []findReplaceChange) (*mcp.CallToolResult, error) {
 	resp := struct {
 		ChangedCount int                 `json:"changedCount"`
 		Changes      []findReplaceChange `json:"changes"`
@@ -585,7 +591,7 @@ func finishFindReplace(absPath string, sheets []xmind.Sheet, changes []findRepla
 		return nil, fmt.Errorf("marshal find_and_replace response: %w", err)
 	}
 	if len(changes) > 0 {
-		if err := xmind.WriteMap(absPath, sheets); err != nil {
+		if err := mw.Commit(sheets); err != nil {
 			return nil, fmt.Errorf("write map: %w", err)
 		}
 	}
@@ -600,15 +606,16 @@ func (h *XMindHandler) FindAndReplace(ctx context.Context, req mcp.CallToolReque
 	if toolErr != nil {
 		return toolErr, nil
 	}
-	sheets, sheetsToUpdate, toolErr2, err := findAndReplaceLoadSheets(absPath, args)
+	sheets, mw, sheetsToUpdate, toolErr2, err := findAndReplaceLoadSheets(absPath, args)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = mw.Close() }()
 	if toolErr2 != nil {
 		return toolErr2, nil
 	}
 	changes := findReplaceRunOnSheets(sheetsToUpdate, findStr, replaceStr, exact)
-	return finishFindReplace(absPath, sheets, changes)
+	return finishFindReplace(mw, sheets, changes)
 }
 
 func stringArgAllowEmpty(args map[string]any, key string) (string, *mcp.CallToolResult) {
