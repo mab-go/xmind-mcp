@@ -10,7 +10,6 @@ import (
 	"github.com/mab-go/xmind-mcp/internal/version"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
@@ -34,8 +33,7 @@ var (
 	}
 )
 
-// init registers cobra/viper setup hooks, normalizes global flag names (underscores to
-// hyphens), and configures the version output template.
+// init registers cobra/viper setup hooks and configures the version output template.
 func init() {
 	cobra.OnInitialize(func() {
 		viper.SetEnvPrefix("xmind_mcp")
@@ -46,7 +44,6 @@ func init() {
 		_ = viper.BindPFlag("log-level", cmd.PersistentFlags().Lookup("log-level"))
 	})
 	cmd.PersistentFlags().String("log-level", "info", "log level: debug, info, warn, error")
-	cmd.SetGlobalNormalizationFunc(wordSepNormalizeFunc)
 	cmd.SetVersionTemplate("{{.Version}}\n")
 }
 
@@ -66,12 +63,6 @@ func parseLogLevel(s string) (logging.Level, error) {
 	default:
 		return 0, fmt.Errorf("invalid log level: %q (want debug, info, warn, or error)", s)
 	}
-}
-
-// wordSepNormalizeFunc normalizes flag names by replacing underscores with hyphens.
-func wordSepNormalizeFunc(_ *pflag.FlagSet, name string) pflag.NormalizedName {
-	name = strings.ReplaceAll(name, "_", "-")
-	return pflag.NormalizedName(name)
 }
 
 // main runs the root cobra command; on failure it logs a fatal error and exits.
