@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/mab-go/xmind-mcp/internal/logging"
+	"github.com/mab-go/logging"
 	"github.com/mab-go/xmind-mcp/internal/server/handler"
 	"github.com/mab-go/xmind-mcp/internal/version"
 
@@ -67,20 +67,22 @@ func RunStdioServer() error {
 	h := handler.NewXMindHandler()
 
 	shutdown := func() {
-		log.Info("Server shutdown complete")
+		log.Info(eventServerStopped)
 	}
 	defer shutdown()
 
 	srv := newXMindServer(ctx, h)
 
+	log.WithField("transport", "stdio").Info(eventServerReady)
+
 	if err := mcpserver.ServeStdio(srv); err != nil {
 		if err != context.Canceled && err != io.EOF {
-			log.WithError(err).Error("Error running MCP server")
+			log.WithError(err).Error(eventServerError)
 			return fmt.Errorf("failed to start stdio MCP server: %w", err)
 		}
 	}
 
-	log.Info("Received shutdown signal; shutting down server...")
+	log.Info(eventServerStopping)
 
 	return nil
 }

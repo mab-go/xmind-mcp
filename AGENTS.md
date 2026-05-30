@@ -33,6 +33,7 @@ internal/
     server.go             — MCP server setup and tool registration
     tools.go              — tool definitions as package-level var declarations
     hooks.go              — MCP lifecycle hooks (before/after initialize)
+    events.go             — logging event-name constants (logging.Event)
     handler/
       handler.go          — XMindHandler struct and shared utilities (textResult, jsonResult, etc.)
       handler_test.go     — tests for handler helpers (e.g. deepCloneTopic)
@@ -51,7 +52,6 @@ internal/
     defaults.go           — DefaultTheme and DefaultSheetExtensions for new maps
     default_theme.json    — embedded default theme blob (sourced from kitchen-sink fixture)
     stub_content.xml      — embedded legacy content.xml written into every new zip
-  logging/                — context-carried logging helpers; do not modify
 testdata/
   kitchen-sink.xmind      — primary test fixture; exercises every supported feature
 .agents/
@@ -229,12 +229,24 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 
 ### Logging
 
-Do not modify `internal/logging/`. Use the context-carried logger pattern throughout:
+Logging uses `github.com/mab-go/logging`. Log messages are identified by
+`logging.Event` constants rather than ad-hoc strings: each package declares its
+events as unexported constants (entity.verb naming, e.g. `server.starting`) in a
+per-package `events.go` file. Passing an `Event` as the first argument to a level
+method lifts it into a structured `event=` field and uses the event name as the
+message. Use the context-carried logger pattern throughout:
 
 ```go
 log, _ := logging.FromContext(ctx)
-log.WithField("path", path).Debug("Opening map")
+log.WithField("id", id).Debug(eventServerStarting)
 ```
+
+The default level is `INFO`, set in `main.go`'s `RunE` via
+`logging.SetDefaultConfig` before `server.RunStdioServer`. It is configurable
+with the `--log-level` flag or the `XMIND_MCP_LOG_LEVEL` env var
+(`debug`/`info`/`warn`/`error`); `parseLogLevel` in `main.go` rejects unknown
+values. Reserve `Info` for events visible at the default level (e.g.
+`server.ready`, `server.stopped`); keep routine per-connection detail at `Debug`.
 
 ### main.go
 
@@ -257,8 +269,8 @@ Use only these external dependencies — do not add others without good reason:
 
 ```
 github.com/google/uuid
+github.com/mab-go/logging
 github.com/mark3labs/mcp-go
-github.com/sirupsen/logrus
 github.com/spf13/cobra
 github.com/spf13/viper
 ```

@@ -4,8 +4,8 @@ go 1.26.1
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/mab-go/logging v0.1.0
 	github.com/mark3labs/mcp-go v0.32.0
-	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
