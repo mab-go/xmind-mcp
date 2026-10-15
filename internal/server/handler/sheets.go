@@ -3,8 +3,9 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"slices"
 
 	"github.com/google/uuid"
@@ -257,14 +258,13 @@ func (h *XMindHandler) CreateMap(ctx context.Context, req mcp.CallToolRequest) (
 		sheetTitle = "Sheet 1"
 	}
 
-	if _, err := os.Stat(absPath); err == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("file already exists: %s", absPath)), nil
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("stat file: %w", err)
-	}
-
+	// CreateNewMap claims the path atomically and refuses an existing file, so there is no
+	// separate existence check here (it would race with a concurrent creator).
 	sh := newSheet(sheetTitle, rootTitle)
 	if err := xmind.CreateNewMap(absPath, []xmind.Sheet{sh}); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return mcp.NewToolResultError(fmt.Sprintf("file already exists: %s", absPath)), nil
+		}
 		return nil, fmt.Errorf("create map: %w", err)
 	}
 

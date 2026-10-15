@@ -8,7 +8,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 
@@ -22,6 +24,12 @@ func main() {
 	outPath := "example.xmind"
 	if len(os.Args) > 1 {
 		outPath = os.Args[1]
+	}
+
+	// CreateNewMap never overwrites, so remove any previous output to keep
+	// "regenerate at any time" working.
+	if err := os.Remove(outPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Fatalf("remove old output: %v", err)
 	}
 
 	sheets := []xmind.Sheet{buildSheet()}

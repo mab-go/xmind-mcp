@@ -207,10 +207,29 @@ func writeMapBody(path string, sheets []Sheet, zr *zip.Reader, releaseSource fun
 
 // CreateNewMap writes a new .xmind zip with content.json, metadata.json, manifest.json,
 // and the standard XMind compatibility content.xml stub.
+//
+// It never overwrites. It first claims path with O_CREATE|O_EXCL, which is atomic, so a
+// file that already exists (or appears concurrently) is left alone and the returned error
+// wraps fs.ErrExist. The finished temp file is then renamed over that empty placeholder;
+// on any failure the placeholder is removed.
 func CreateNewMap(path string, sheets []Sheet) error {
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
 		return fmt.Errorf("marshal content.json: %w", err)
+	}
+
+	placeholder, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create map file: %w", err)
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := placeholder.Close(); err != nil {
+		return fmt.Errorf("close placeholder: %w", err)
 	}
 
 	dir := filepath.Dir(path)
@@ -237,5 +256,6 @@ func CreateNewMap(path string, sheets []Sheet) error {
 		return err
 	}
 	committed = true
+	published = true
 	return nil
 }
