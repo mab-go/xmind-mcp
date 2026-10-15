@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -361,4 +362,70 @@ func TestCreateNewMapFloatPositionPrecision(t *testing.T) {
 	if dt.Position.X != x || dt.Position.Y != y {
 		t.Fatalf("position: got (%v,%v) want (%v,%v)", dt.Position.X, dt.Position.Y, x, y)
 	}
+}
+
+func minimalSheet() Sheet {
+	return Sheet{
+		ID:        uuid.New().String(),
+		Class:     "sheet",
+		Title:     "S",
+		RootTopic: Topic{ID: uuid.New().String(), Class: "topic", Title: "R"},
+	}
+}
+
+func assertNoTempFiles(t *testing.T, dir string) {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".xmind-tmp-") {
+			t.Fatalf("leaked temp file: %s", e.Name())
+		}
+	}
+}
+
+// TestCreateNewMapRefusesExistingFile checks CreateNewMap never overwrites: an existing
+// path is left byte-identical and the error wraps fs.ErrExist.
+func TestCreateNewMapRefusesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exists.xmind")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CreateNewMap(path, []Sheet{minimalSheet()})
+	if !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("CreateNewMap on existing file: err = %v, want fs.ErrExist", err)
+	}
+	got, rerr := os.ReadFile(path)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if string(got) != "original" {
+		t.Fatalf("existing file was modified: %q", got)
+	}
+	assertNoTempFiles(t, dir)
+}
+
+// TestCreateNewMapRemovesPlaceholderOnFailure checks that when the final rename fails,
+// CreateNewMap removes the placeholder it claimed and leaves no temp files.
+func TestCreateNewMapRemovesPlaceholderOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "new.xmind")
+
+	orig := osRename
+	t.Cleanup(func() { osRename = orig })
+	osRename = func(string, string) error {
+		return errors.New("injected swap failure")
+	}
+
+	if err := CreateNewMap(path, []Sheet{minimalSheet()}); err == nil {
+		t.Fatal("expected CreateNewMap to fail when the swap rename fails")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("placeholder left behind after failure: stat err = %v", err)
+	}
+	assertNoTempFiles(t, dir)
 }

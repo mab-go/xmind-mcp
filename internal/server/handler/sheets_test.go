@@ -117,6 +117,16 @@ func TestCreateMapFileExists(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected tool error when file exists")
 	}
+	if msg := textContent(t, res); !strings.Contains(msg, "file already exists") {
+		t.Errorf("error message = %q, want it to mention \"file already exists\"", msg)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "x" {
+		t.Errorf("existing file was modified: %q", got)
+	}
 }
 
 func TestAddSheetDeleteSheet(t *testing.T) {
