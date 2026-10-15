@@ -1,6 +1,51 @@
 package server
 
-import "github.com/mark3labs/mcp-go/mcp"
+import (
+	"fmt"
+
+	"github.com/mark3labs/mcp-go/mcp"
+)
+
+// toolEffect classifies how a tool affects the .xmind file, for MCP tool annotations.
+// The zero value is deliberately invalid: withAnnotations panics on it.
+type toolEffect int
+
+const (
+	effectReadOnly              toolEffect = iota + 1 // never writes the file
+	effectAdditive                                    // only adds content; repeat calls add more
+	effectAdditiveIdempotent                          // only adds content; a repeat call has no effect
+	effectDestructive                                 // may change or remove existing content
+	effectDestructiveIdempotent                       // as above; a repeat call has no further effect
+)
+
+// withAnnotations sets the tool's display title and all four MCP behavior hints.
+// Every hint is set explicitly because mcp.NewTool otherwise defaults each tool to
+// destructive and open-world. Every xmind tool is local-only, so openWorldHint is always false.
+// An unknown effect panics; tools are package-level vars, so that surfaces at startup.
+func withAnnotations(title string, effect toolEffect) mcp.ToolOption {
+	var readOnly, destructive, idempotent bool
+	switch effect {
+	case effectReadOnly:
+		readOnly, idempotent = true, true
+	case effectAdditive:
+		// all hints false
+	case effectAdditiveIdempotent:
+		idempotent = true
+	case effectDestructive:
+		destructive = true
+	case effectDestructiveIdempotent:
+		destructive, idempotent = true, true
+	default:
+		panic(fmt.Sprintf("withAnnotations: unknown toolEffect %d for %q", effect, title))
+	}
+	return mcp.WithToolAnnotation(mcp.ToolAnnotation{
+		Title:           title,
+		ReadOnlyHint:    new(readOnly),
+		DestructiveHint: new(destructive),
+		IdempotentHint:  new(idempotent),
+		OpenWorldHint:   new(false),
+	})
+}
 
 var toolOpenMap = mcp.NewTool(
 	"xmind_open_map",
@@ -8,18 +53,21 @@ var toolOpenMap = mcp.NewTool(
 		"Parse a .xmind file and return a structural summary of its sheets, "+
 			"root topics, and node counts. Typically the first call in any workflow.",
 	),
+	withAnnotations("Open Map", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 )
 
 var toolListSheets = mcp.NewTool(
 	"xmind_list_sheets",
 	mcp.WithDescription("List all sheets in a workbook with id and title."),
+	withAnnotations("List Sheets", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 )
 
 var toolCreateMap = mcp.NewTool(
 	"xmind_create_map",
 	mcp.WithDescription("Create a new .xmind file with one sheet and a root topic."),
+	withAnnotations("Create Map", effectAdditiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path where the new file will be written")),
 	mcp.WithString("root_title", mcp.Required(), mcp.Description("Title for the root/central topic")),
 	mcp.WithString("sheet_title", mcp.Description(`Title for the first sheet (default "Sheet 1")`)),
@@ -28,6 +76,7 @@ var toolCreateMap = mcp.NewTool(
 var toolAddSheet = mcp.NewTool(
 	"xmind_add_sheet",
 	mcp.WithDescription("Add a new sheet to an existing workbook."),
+	withAnnotations("Add Sheet", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("title", mcp.Required(), mcp.Description("Title of the new sheet")),
 	mcp.WithString("root_title", mcp.Required(), mcp.Description("Title for the sheet's root topic")),
@@ -36,6 +85,7 @@ var toolAddSheet = mcp.NewTool(
 var toolDeleteSheet = mcp.NewTool(
 	"xmind_delete_sheet",
 	mcp.WithDescription("Remove a sheet from a workbook. At least one sheet must remain."),
+	withAnnotations("Delete Sheet", effectDestructiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("ID of the sheet to delete")),
 )
@@ -47,6 +97,7 @@ var toolGetSubtree = mcp.NewTool(
 			"and structureClass when the topic overrides sheet layout. Optional include_notes adds plain-text notes; "+
 			"include_links adds hyperlink href. Optional depth limits nesting; truncated branches report childrenCount.",
 	),
+	withAnnotations("Get Subtree", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet to read from")),
 	mcp.WithString("topic_id", mcp.Description("Root of the subtree; omit for sheet root")),
@@ -64,6 +115,7 @@ var toolGetTopicProperties = mcp.NewTool(
 			"by list (attached, detached, summary — not the same as summaryCount). Use xmind_get_subtree for the full hierarchy. "+
 			"Use after writes to verify what was stored.",
 	),
+	withAnnotations("Get Topic Properties", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet containing the topic")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to inspect")),
@@ -76,6 +128,7 @@ var toolSearchTopics = mcp.NewTool(
 			"Omit sheet_id to search all sheets; results will include sheetId and sheetTitle fields. "+
 			"Each match includes ancestryPath: titles from the sheet root down to (but not including) the matched topic, or null when the match is the sheet root.",
 	),
+	withAnnotations("Search Topics", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Description("Sheet to search; omit or null to search all sheets")),
 	mcp.WithString("query", mcp.Required(), mcp.Description("Keyword or phrase to search for")),
@@ -92,6 +145,7 @@ var toolFindTopic = mcp.NewTool(
 			"ancestryPath lists titles from the sheet root down to (but not including) the matched topic; it is always sheet-root-relative, not relative to parent_id scope, and is null when the match is the sheet root. "+
 			"Use xmind_search_topics for substring or cross-sheet search.",
 	),
+	withAnnotations("Find Topic", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("title", mcp.Required(), mcp.Description("Exact topic title to find (non-empty)")),
@@ -107,6 +161,7 @@ var toolAddTopic = mcp.NewTool(
 		"Add a new attached child topic under a parent topic. Optional metadata (notes, labels, markers, link, remove_markers) can be set inline with the same semantics as xmind_set_topic_properties; "+
 			"remove_markers is applied after markers when both are set. Otherwise use xmind_set_topic_properties. Returns JSON: {\"id\":\"…\",\"position\":N,\"siblingCount\":N}.",
 	),
+	withAnnotations("Add Topic", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("ID of the parent topic")),
@@ -125,6 +180,7 @@ var toolAddTopicsBulk = mcp.NewTool(
 		"Add multiple topics under a parent in one call; each item may nest children. Each topic object may include optional notes, labels, markers, link, and remove_markers (same semantics as xmind_set_topic_properties; remove_markers after markers when both are set). "+
 			`Returns JSON: {"addedCount":N,"parentId":"…","firstPosition":N,"siblingCount":N,"rootTopicIds":["…"]}.`,
 	),
+	withAnnotations("Add Topics (Bulk)", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("ID of the parent topic")),
@@ -140,6 +196,7 @@ var toolDuplicateTopic = mcp.NewTool(
 			"Sheet-level relationships are not copied. Hyperlinks or note text that reference other topic IDs by ID are not rewritten and may still point at the original topics. "+
 			`Returns JSON: {"sourceId":"…","newRootId":"…","parentId":"…","copiedCount":N,"position":N,"siblingCount":N}.`,
 	),
+	withAnnotations("Duplicate Topic", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet containing the source topic")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("Root topic of the subtree to duplicate")),
@@ -150,6 +207,7 @@ var toolDuplicateTopic = mcp.NewTool(
 var toolRenameTopic = mcp.NewTool(
 	"xmind_rename_topic",
 	mcp.WithDescription("Rename an existing topic."),
+	withAnnotations("Rename Topic", effectDestructiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to rename")),
@@ -159,6 +217,7 @@ var toolRenameTopic = mcp.NewTool(
 var toolDeleteTopic = mcp.NewTool(
 	"xmind_delete_topic",
 	mcp.WithDescription("Delete a topic and its descendants. Cannot delete the sheet root."),
+	withAnnotations("Delete Topic", effectDestructiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to delete")),
@@ -167,6 +226,7 @@ var toolDeleteTopic = mcp.NewTool(
 var toolMoveTopic = mcp.NewTool(
 	"xmind_move_topic",
 	mcp.WithDescription("Move a topic (and subtree) to a new parent as an attached child. Use position to control insertion order; omit to append at the end. Returns JSON: {\"topicId\":\"…\",\"parentId\":\"…\",\"position\":N,\"siblingCount\":N}."),
+	withAnnotations("Move Topic", effectDestructiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to move")),
@@ -177,6 +237,7 @@ var toolMoveTopic = mcp.NewTool(
 var toolReorderChildren = mcp.NewTool(
 	"xmind_reorder_children",
 	mcp.WithDescription("Reorder a topic's attached children; ordered_ids must list every child exactly once."),
+	withAnnotations("Reorder Children", effectDestructiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("ID of the parent whose children to reorder")),
@@ -192,6 +253,7 @@ var toolSetTopicProperties = mcp.NewTool(
 			"unlike an empty markers array which clears all markers. "+
 			"Null semantics: only notes treats JSON null as clear; for labels, markers, remove_markers, and link, omit the key or pass null to leave that field unchanged.",
 	),
+	withAnnotations("Set Topic Properties", effectDestructiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to update")),
@@ -209,6 +271,7 @@ var toolSetTopicPropertiesBulk = mcp.NewTool(
 			"topic_ids must be non-empty with no duplicate IDs; every ID must exist on the sheet. "+
 			"At least one property argument is required. remove_markers is applied after markers when both are set.",
 	),
+	withAnnotations("Set Topic Properties (Bulk)", effectDestructiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithArray("topic_ids", mcp.Required(), mcp.Description("Topic IDs to update (non-empty strings, no duplicates)")),
@@ -222,6 +285,7 @@ var toolSetTopicPropertiesBulk = mcp.NewTool(
 var toolAddFloatingTopic = mcp.NewTool(
 	"xmind_add_floating_topic",
 	mcp.WithDescription("Add a floating (detached) topic on the sheet, positioned under the root topic."),
+	withAnnotations("Add Floating Topic", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("title", mcp.Required(), mcp.Description("Title of the floating topic")),
@@ -230,6 +294,7 @@ var toolAddFloatingTopic = mcp.NewTool(
 var toolAddRelationship = mcp.NewTool(
 	"xmind_add_relationship",
 	mcp.WithDescription("Add a relationship (connector) between two topics. Stored at sheet level, not on topics. from_id and to_id must be different topics."),
+	withAnnotations("Add Relationship", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("from_id", mcp.Required(), mcp.Description("Source topic ID (end1Id)")),
@@ -243,6 +308,7 @@ var toolListRelationships = mcp.NewTool(
 		"List all sheet-level relationships as JSON: sheetId, relationshipCount, and relationships (endpoint ids, "+
 			"titles, optional connector title).",
 	),
+	withAnnotations("List Relationships", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description(
 		"Sheet to read. Each item's end1Id/end2Id correspond to from_id/to_id on xmind_add_relationship; optional title matches the add tool's label.",
@@ -252,6 +318,7 @@ var toolListRelationships = mcp.NewTool(
 var toolDeleteRelationship = mcp.NewTool(
 	"xmind_delete_relationship",
 	mcp.WithDescription("Remove a sheet-level relationship by id (from xmind_list_relationships)."),
+	withAnnotations("Delete Relationship", effectDestructiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet containing the relationship")),
 	mcp.WithString("relationship_id", mcp.Required(), mcp.Description("ID of the relationship to delete")),
@@ -260,6 +327,7 @@ var toolDeleteRelationship = mcp.NewTool(
 var toolAddSummary = mcp.NewTool(
 	"xmind_add_summary",
 	mcp.WithDescription("Add a summary callout spanning a range of sibling attached children (double-write to children.summary and summaries)."),
+	withAnnotations("Add Summary", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("Parent topic whose attached children are summarized")),
@@ -271,6 +339,7 @@ var toolAddSummary = mcp.NewTool(
 var toolAddBoundary = mcp.NewTool(
 	"xmind_add_boundary",
 	mcp.WithDescription("Add a boundary grouping all attached children of a parent topic."),
+	withAnnotations("Add Boundary", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("Parent topic whose children are enclosed")),
@@ -284,6 +353,7 @@ var toolFlattenToOutline = mcp.NewTool(
 			"Optional include_notes appends plain-text note lines below each topic: Markdown uses blockquotes (>), "+
 			"plain text uses indented [note] lines.",
 	),
+	withAnnotations("Flatten to Outline", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet to read from")),
 	mcp.WithString("topic_id", mcp.Description("Root of subtree; omit for sheet root")),
@@ -294,6 +364,7 @@ var toolFlattenToOutline = mcp.NewTool(
 var toolImportFromOutline = mcp.NewTool(
 	"xmind_import_from_outline",
 	mcp.WithDescription("Parse indented text or Markdown outline and attach topics to a sheet or parent. Omit sheet_id to create a new sheet; parent_id requires sheet_id."),
+	withAnnotations("Import from Outline", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("outline", mcp.Required(), mcp.Description("Outline text (Markdown headings, list, or indented plain text)")),
 	mcp.WithString("sheet_id", mcp.Description("Target sheet; omit to append a new sheet")),
@@ -306,6 +377,7 @@ var toolFindAndReplace = mcp.NewTool(
 		"Replace text in topic titles (case-insensitive substring or exact title match). "+
 			"Omit sheet_id to apply across all sheets.",
 	),
+	withAnnotations("Find and Replace", effectDestructive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Description("Target sheet; omit or null to apply to all sheets")),
 	mcp.WithString("find", mcp.Required(), mcp.Description("Text to find")),

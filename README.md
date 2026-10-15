@@ -191,7 +191,9 @@ To enable it from a client config, set it via `env`:
 ## Tools
 
 All tools are prefixed with `xmind_` to avoid collisions in multi-server
-environments.
+environments. Each tool also carries MCP annotations (a display title plus
+read-only, destructive, and idempotent hints), so clients can auto-approve
+reads and ask before destructive edits.
 
 ### Tier 1: File & Sheet Management
 
