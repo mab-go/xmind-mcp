@@ -220,6 +220,8 @@ if err := mw.Commit(sheets); err != nil {
 }
 ```
 
+**Idempotent tools must not write when nothing changes.** A tool annotated `effectAdditiveIdempotent` or `effectDestructiveIdempotent` (see Tool definitions) must leave the file byte-identical when a call changes nothing, so a repeated call has no effect. Do not bump `revisionId` and commit unconditionally. Use the helpers in `mutate.go`: `commitSheetChange(mw, sheets, sh, changed)` bumps the sheet's `revisionId` and commits only when `changed` is true. Compute `changed` from a specific check (`setTopicTitle`, `attachedOrderMatches`) or wrap the mutation in `trackTopicChanges`, which compares JSON snapshots taken before and after. When the mutation itself is not reversible in place, check before mutating and return early, as `MoveTopic` does with `moveIsNoOp`. The no-op path returns the same success response as a real change. `TestIdempotentToolsRepeatDoesNotWrite` in `mutate_test.go` covers each idempotent tool.
+
 For additional non-path arguments, use the shared extraction helpers rather than inlining `args[...]` lookups and type assertions. Each returns a `*mcp.CallToolResult` tool error you forward with `if … != nil { return …, nil }`:
 
 | Helper | Location | Semantics |
