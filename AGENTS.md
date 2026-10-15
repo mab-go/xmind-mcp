@@ -32,6 +32,7 @@ internal/
   server/
     server.go             — MCP server setup and tool registration
     tools.go              — tool definitions as package-level var declarations
+    tools_test.go         — asserts every tool's title and annotation hints
     hooks.go              — MCP lifecycle hooks (before/after initialize)
     events.go             — logging event-name constants (logging.Event)
     handler/
@@ -135,9 +136,22 @@ Define tools as package-level `var` declarations in `internal/server/tools.go`:
 var toolOpenMap = mcp.NewTool(
     "xmind_open_map",
     mcp.WithDescription("..."),
+    withAnnotations("Open Map", effectReadOnly),
     mcp.WithString("path", mcp.Required(), mcp.Description("...")),
 )
 ```
+
+Every tool must declare its display title and MCP behavior hints with `withAnnotations(title, effect)` (defined in `tools.go`), placed right after `mcp.WithDescription`. This is mandatory: without it, `mcp.NewTool` defaults every tool to destructive and open-world, so clients can't auto-approve reads. Pick the `toolEffect`:
+
+| Effect | Use when the tool… |
+|---|---|
+| `effectReadOnly` | never writes the file |
+| `effectAdditive` | only adds content, and each repeat call adds more |
+| `effectAdditiveIdempotent` | only adds content, and a repeat call with the same arguments has no further effect |
+| `effectDestructive` | may change or remove existing content, and a repeat call can change it again |
+| `effectDestructiveIdempotent` | may change or remove existing content, and a repeat call has no further effect (renames, sets, deletes) |
+
+`openWorldHint` is always `false`: every tool touches only the local file named by `path`. The `toolEffect` zero value is invalid and an unknown effect makes `withAnnotations` panic; since tools are package-level vars, that fails every test in the package and stops the binary at startup. When adding an effect, add a `case` for it. Add each new tool to `expectedAnnotations` in `internal/server/tools_test.go`; the test fails for any registered tool missing from that table.
 
 Register them in `server.go`:
 
