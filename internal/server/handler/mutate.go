@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -646,10 +648,7 @@ func (h *XMindHandler) RenameTopic(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
 	}
 
-	topic.Title = title
-	topic.TitleUnedited = false
-	sh.RevisionID = uuid.New().String()
-	if err := mw.Commit(sheets); err != nil {
+	if err := commitSheetChange(mw, sheets, sh, setTopicTitle(topic, title)); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("renamed topic %s", topicID)), nil
@@ -714,6 +713,24 @@ func validateMoveTopicPreconditions(sh *xmind.Sheet, topicID, newParentID string
 		return mcp.NewToolResultError("cannot move a topic into its own subtree")
 	}
 	return nil
+}
+
+// moveIsNoOp reports whether moving topicID under newParentID at pos would leave it where it
+// already is (same parent, attached list, same index). MoveTopic must return early in that
+// case rather than detach and re-insert: that round trip is not a no-op for summaries, since
+// a topic at a summary range edge drops out of the range. idx and n are the topic's index and
+// the parent's attached-child count, matching what a real move would report.
+func moveIsNoOp(root *xmind.Topic, topicID, newParentID string, pos *int) (idx, n int, ok bool) {
+	parent, i, list := findParentOfTopic(root, topicID)
+	if parent == nil || parent.ID != newParentID || list != "attached" {
+		return 0, 0, false
+	}
+	n = len(parent.Children.Attached)
+	target := n - 1
+	if pos != nil {
+		target = *pos
+	}
+	return i, n, target == i
 }
 
 func detachTopicFromTree(root *xmind.Topic, topicID string) (*xmind.Topic, *mcp.CallToolResult) {
@@ -786,6 +803,9 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 	}
 	if terr := validateMoveTopicPreconditions(sh, topicID, newParentID, topic); terr != nil {
 		return terr, nil
+	}
+	if idx, n, ok := moveIsNoOp(&sh.RootTopic, topicID, newParentID, pos); ok {
+		return jsonResult(moveTopicResponse{TopicID: topicID, ParentID: newParentID, Position: idx, SiblingCount: n})
 	}
 
 	removed, rerr := detachTopicFromTree(&sh.RootTopic, topicID)
@@ -923,9 +943,9 @@ func (h *XMindHandler) ReorderChildren(ctx context.Context, req mcp.CallToolRequ
 		return verr, nil
 	}
 
+	changed := !attachedOrderMatches(parent.Children.Attached, orderedIDs)
 	parent.Children.Attached = newOrder
-	sh.RevisionID = uuid.New().String()
-	if err := mw.Commit(sheets); err != nil {
+	if err := commitSheetChange(mw, sheets, sh, changed); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("reordered %d children under %s", len(newOrder), parentID)), nil
@@ -1262,6 +1282,50 @@ func applyTopicPropertiesToTopics(args map[string]any, topics []*xmind.Topic) *m
 	return nil
 }
 
+// commitSheetChange bumps sh's revisionId and commits sheets. When changed is false it
+// leaves the file untouched, so a repeat call with the same arguments has no effect (the
+// tools that use it advertise idempotentHint).
+func commitSheetChange(mw *xmind.MapWriter, sheets []xmind.Sheet, sh *xmind.Sheet, changed bool) error {
+	if !changed {
+		return nil
+	}
+	sh.RevisionID = uuid.New().String()
+	return mw.Commit(sheets)
+}
+
+// setTopicTitle renames t (clearing titleUnedited) and reports whether anything changed.
+func setTopicTitle(t *xmind.Topic, title string) bool {
+	if t.Title == title && !t.TitleUnedited {
+		return false
+	}
+	t.Title = title
+	t.TitleUnedited = false
+	return true
+}
+
+// attachedOrderMatches reports whether attached is already in orderedIDs order. orderedIDs
+// must already be validated against attached (same length, same IDs).
+func attachedOrderMatches(attached []xmind.Topic, orderedIDs []string) bool {
+	for i := range attached {
+		if attached[i].ID != orderedIDs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// trackTopicChanges runs apply and reports whether it changed any of topics, by comparing
+// JSON snapshots taken before and after (comparison only; persisting still goes through
+// MapWriter.Commit). A snapshot error counts as a change, so the caller commits as before.
+func trackTopicChanges(topics []*xmind.Topic, apply func() *mcp.CallToolResult) (changed bool, toolErr *mcp.CallToolResult) {
+	before, berr := json.Marshal(topics)
+	if toolErr = apply(); toolErr != nil {
+		return false, toolErr
+	}
+	after, aerr := json.Marshal(topics)
+	return berr != nil || aerr != nil || !bytes.Equal(before, after), nil
+}
+
 // SetTopicProperties updates optional metadata on a topic.
 func (h *XMindHandler) SetTopicProperties(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
@@ -1296,12 +1360,14 @@ func (h *XMindHandler) SetTopicProperties(ctx context.Context, req mcp.CallToolR
 		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
 	}
 
-	if toolResult := applyTopicPropertiesArgs(args, topic); toolResult != nil {
+	changed, toolResult := trackTopicChanges([]*xmind.Topic{topic}, func() *mcp.CallToolResult {
+		return applyTopicPropertiesArgs(args, topic)
+	})
+	if toolResult != nil {
 		return toolResult, nil
 	}
 
-	sh.RevisionID = uuid.New().String()
-	if err := mw.Commit(sheets); err != nil {
+	if err := commitSheetChange(mw, sheets, sh, changed); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("updated topic %s", topicID)), nil
@@ -1343,12 +1409,14 @@ func (h *XMindHandler) SetTopicPropertiesBulk(ctx context.Context, req mcp.CallT
 		return missErr, nil
 	}
 
-	if toolResult := applyTopicPropertiesToTopics(args, topics); toolResult != nil {
+	changed, toolResult := trackTopicChanges(topics, func() *mcp.CallToolResult {
+		return applyTopicPropertiesToTopics(args, topics)
+	})
+	if toolResult != nil {
 		return toolResult, nil
 	}
 
-	sh.RevisionID = uuid.New().String()
-	if err := mw.Commit(sheets); err != nil {
+	if err := commitSheetChange(mw, sheets, sh, changed); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
 	return textResult(fmt.Sprintf("updated %d topics", len(topicIDs))), nil

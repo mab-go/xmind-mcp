@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -2619,5 +2620,146 @@ func TestWalkTopicsStopsOnSiblings(t *testing.T) {
 		if id == "b" {
 			t.Fatalf("should not visit b after stopping at a, visited=%v", visited)
 		}
+	}
+}
+
+// newABCMap creates a map whose root has attached children A, B, C. It returns the path,
+// sheet ID, root ID and the children's IDs in order.
+func newABCMap(t *testing.T, h *XMindHandler) (path, sheetID, rootID string, ids []string) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "abc.xmind")
+	if res := callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"}); res.IsError {
+		t.Fatalf("CreateMap: %s", textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID, rootID = sheets[0].ID, sheets[0].RootTopic.ID
+	for _, title := range []string{"A", "B", "C"} {
+		res := callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sheetID, "parent_id": rootID, "title": title})
+		if res.IsError {
+			t.Fatalf("AddTopic %s: %s", title, textContent(t, res))
+		}
+		ids = append(ids, parseAddTopicResult(t, res).ID)
+	}
+	return path, sheetID, rootID, ids
+}
+
+func readFileBytes(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestIdempotentToolsRepeatDoesNotWrite checks the tools annotated idempotentHint: true leave
+// the file byte-identical (no new revisionId, no rewrite) when a call is repeated.
+func TestIdempotentToolsRepeatDoesNotWrite(t *testing.T) {
+	h := NewXMindHandler()
+	tests := []struct {
+		name string
+		fn   func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+		args func(path, sheetID, rootID string, ids []string) map[string]any
+	}{
+		{"rename_topic", h.RenameTopic, func(path, sheetID, _ string, ids []string) map[string]any {
+			return map[string]any{"path": path, "sheet_id": sheetID, "topic_id": ids[0], "title": "A2"}
+		}},
+		{"move_topic", h.MoveTopic, func(path, sheetID, _ string, ids []string) map[string]any {
+			return map[string]any{"path": path, "sheet_id": sheetID, "topic_id": ids[2], "new_parent_id": ids[0]}
+		}},
+		{"reorder_children", h.ReorderChildren, func(path, sheetID, rootID string, ids []string) map[string]any {
+			return map[string]any{"path": path, "sheet_id": sheetID, "parent_id": rootID, "ordered_ids": []any{ids[2], ids[1], ids[0]}}
+		}},
+		{"set_topic_properties", h.SetTopicProperties, func(path, sheetID, _ string, ids []string) map[string]any {
+			return map[string]any{"path": path, "sheet_id": sheetID, "topic_id": ids[1], "labels": []any{"x"}, "notes": "n"}
+		}},
+		{"set_topic_properties_bulk", h.SetTopicPropertiesBulk, func(path, sheetID, _ string, ids []string) map[string]any {
+			return map[string]any{"path": path, "sheet_id": sheetID, "topic_ids": []any{ids[0], ids[1]}, "labels": []any{"x"}}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path, sheetID, rootID, ids := newABCMap(t, h)
+			args := tc.args(path, sheetID, rootID, ids)
+
+			before := readFileBytes(t, path)
+			first := callTool(t, tc.fn, args)
+			if first.IsError {
+				t.Fatalf("first call: %s", textContent(t, first))
+			}
+			afterFirst := readFileBytes(t, path)
+			if bytes.Equal(before, afterFirst) {
+				t.Fatal("first call did not change the file; test setup is not exercising a real change")
+			}
+
+			second := callTool(t, tc.fn, args)
+			if second.IsError {
+				t.Fatalf("second call: %s", textContent(t, second))
+			}
+			if got, want := textContent(t, second), textContent(t, first); got != want {
+				t.Errorf("second response = %q, want same as first %q", got, want)
+			}
+			if !bytes.Equal(afterFirst, readFileBytes(t, path)) {
+				t.Error("repeat call rewrote the file")
+			}
+		})
+	}
+}
+
+// TestMoveTopicSamePlaceKeepsSummary checks that moving a topic to where it already is leaves
+// the file untouched. Detaching and re-inserting would drop a topic at a summary range edge
+// out of the range.
+func TestMoveTopicSamePlaceKeepsSummary(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, rootID, ids := newABCMap(t, h)
+
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := &sheets[0].RootTopic
+	sumTopicID := uuid.New().String()
+	root.Summaries = []xmind.Summary{{ID: uuid.New().String(), Range: "(0,2)", TopicID: sumTopicID}}
+	root.Children.Summary = []xmind.Topic{{ID: sumTopicID, Title: "S"}}
+	if err := xmind.WriteMap(path, sheets); err != nil {
+		t.Fatal(err)
+	}
+	before := readFileBytes(t, path)
+
+	moves := []struct {
+		name    string
+		args    map[string]any
+		wantPos int
+	}{
+		{"last topic, no position", map[string]any{"topic_id": ids[2]}, 2},
+		{"first topic, position 0", map[string]any{"topic_id": ids[0], "position": float64(0)}, 0},
+	}
+	for _, m := range moves {
+		args := map[string]any{"path": path, "sheet_id": sheetID, "new_parent_id": rootID}
+		for k, v := range m.args {
+			args[k] = v
+		}
+		res := callTool(t, h.MoveTopic, args)
+		if res.IsError {
+			t.Fatalf("%s: %s", m.name, textContent(t, res))
+		}
+		if got := parseMoveTopicResult(t, res); got.Position != m.wantPos || got.SiblingCount != 3 {
+			t.Errorf("%s: response = %+v, want position %d of 3", m.name, got, m.wantPos)
+		}
+		if !bytes.Equal(before, readFileBytes(t, path)) {
+			t.Errorf("%s: same-place move rewrote the file", m.name)
+		}
+	}
+
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = &sheets[0].RootTopic
+	if len(root.Summaries) != 1 || root.Summaries[0].Range != "(0,2)" || len(root.Children.Summary) != 1 {
+		t.Fatalf("summary changed: summaries=%+v summaryTopics=%d", root.Summaries, len(root.Children.Summary))
 	}
 }
