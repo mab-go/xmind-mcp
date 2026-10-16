@@ -272,17 +272,46 @@ func TestMapWriterCommitAfterClose(t *testing.T) {
 	}
 }
 
+// assertOpenErrorParity checks that OpenMapForUpdate fails on path with the same error as
+// ReadMap and returns no MapWriter.
+func assertOpenErrorParity(t *testing.T, path string) {
+	t.Helper()
+	_, readErr := ReadMap(path)
+	_, mw, openErr := OpenMapForUpdate(path)
+	if mw != nil {
+		t.Fatal("expected nil MapWriter on error")
+	}
+	if readErr == nil || openErr == nil || readErr.Error() != openErr.Error() {
+		t.Fatalf("error mismatch: read=%v open=%v", readErr, openErr)
+	}
+}
+
+// writeZipWithoutContentJSON writes a valid zip at path whose only entry is readme.txt.
+func writeZipWithoutContentJSON(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.Create("readme.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOpenMapForUpdateErrorParity(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
-		missing := filepath.Join(t.TempDir(), "nope.xmind")
-		_, readErr := ReadMap(missing)
-		_, mw, openErr := OpenMapForUpdate(missing)
-		if mw != nil {
-			t.Fatal("expected nil MapWriter on error")
-		}
-		if readErr == nil || openErr == nil || readErr.Error() != openErr.Error() {
-			t.Fatalf("error mismatch: read=%v open=%v", readErr, openErr)
-		}
+		assertOpenErrorParity(t, filepath.Join(t.TempDir(), "nope.xmind"))
 	})
 
 	t.Run("not a zip", func(t *testing.T) {
@@ -290,10 +319,12 @@ func TestOpenMapForUpdateErrorParity(t *testing.T) {
 		if err := os.WriteFile(bad, []byte("not a zip"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, readErr := ReadMap(bad)
-		_, _, openErr := OpenMapForUpdate(bad)
-		if readErr == nil || openErr == nil || readErr.Error() != openErr.Error() {
-			t.Fatalf("error mismatch: read=%v open=%v", readErr, openErr)
-		}
+		assertOpenErrorParity(t, bad)
+	})
+
+	t.Run("zip without content.json", func(t *testing.T) {
+		noContent := filepath.Join(t.TempDir(), "no-content.xmind")
+		writeZipWithoutContentJSON(t, noContent)
+		assertOpenErrorParity(t, noContent)
 	})
 }
