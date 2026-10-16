@@ -106,7 +106,8 @@ func flattenTopicWriteText(b *strings.Builder, title, plain string, depth int, h
 }
 
 func flattenTopicWriteMarkdown(b *strings.Builder, title, plain string, depth int, hasNotes bool) {
-	// Use heading lines at every depth so import heading-mode parses the full tree (list lines would be ignored).
+	// Use heading lines at every depth so the output is unambiguous Markdown. Import also accepts list
+	// items and text under headings, and skips the "> " note lines written below.
 	level := depth + 1
 	if level > 6 {
 		level = 6
@@ -164,7 +165,7 @@ func (h *XMindHandler) ImportFromOutline(ctx context.Context, req mcp.CallToolRe
 	if terr != nil {
 		return terr, nil
 	}
-	sheetIDArg, parentIDArg, aerr := parseImportOutlineSheetArgs(args)
+	sheetIDArg, parentIDArg, rootTitle, aerr := parseImportOutlineSheetArgs(args)
 	if aerr != nil {
 		return aerr, nil
 	}
@@ -186,12 +187,12 @@ func (h *XMindHandler) ImportFromOutline(ctx context.Context, req mcp.CallToolRe
 	}
 
 	if sheetIDArg == "" {
-		return importOutlineNewSheet(mw, sheets, pairs)
+		return importOutlineNewSheet(mw, sheets, pairs, rootTitle)
 	}
 	return importOutlineAppend(mw, sheets, sheetIDArg, parentIDArg, pairs)
 }
 
-func parseImportOutlineSheetArgs(args map[string]any) (sheetID, parentID string, toolErr *mcp.CallToolResult) {
+func parseImportOutlineSheetArgs(args map[string]any) (sheetID, parentID, rootTitle string, toolErr *mcp.CallToolResult) {
 	if v, ok := args["sheet_id"].(string); ok {
 		sheetID = v
 	}
@@ -199,21 +200,34 @@ func parseImportOutlineSheetArgs(args map[string]any) (sheetID, parentID string,
 		parentID = v
 	}
 	if parentID != "" && sheetID == "" {
-		return "", "", mcp.NewToolResultError("invalid arguments: parent_id requires sheet_id (omit parent_id when creating a new sheet)")
+		return "", "", "", mcp.NewToolResultError("invalid arguments: parent_id requires sheet_id (omit parent_id when creating a new sheet)")
 	}
-	return sheetID, parentID, nil
+	rootTitle, _, toolErr = optionalString(args, "root_title")
+	if toolErr != nil {
+		return "", "", "", toolErr
+	}
+	if rootTitle != "" && sheetID != "" {
+		return "", "", "", mcp.NewToolResultError("invalid arguments: root_title only applies when creating a new sheet (omit sheet_id)")
+	}
+	return sheetID, parentID, rootTitle, nil
 }
 
-// importOutlineNewSheet: single tree; first line is sheet+root title; extra depth-0 lines are children of root.
-func importOutlineNewSheet(mw *xmind.MapWriter, sheets []xmind.Sheet, pairs []outlinePair) (*mcp.CallToolResult, error) {
-	root := buildOutlineTreeSingleRoot(pairs)
-	if root == nil {
+// defaultImportRootTitle names the root of a new sheet imported from an outline with several
+// top-level items when no root_title is given.
+const defaultImportRootTitle = "Imported Outline"
+
+// importOutlineNewSheet appends a sheet built from the outline; see newSheetRootFromForest for
+// how its root is chosen.
+func importOutlineNewSheet(mw *xmind.MapWriter, sheets []xmind.Sheet, pairs []outlinePair, rootTitle string) (*mcp.CallToolResult, error) {
+	forest := buildOutlineForest(pairs)
+	if len(forest) == 0 {
 		return mcp.NewToolResultError("could not build outline tree"), nil
 	}
+	title, children := newSheetRootFromForest(forest, rootTitle)
 	bumpAllSheetsRevisionID(sheets)
-	sh := newSheet(root.title, root.title)
+	sh := newSheet(title, title)
 	ch := ensureChildren(&sh.RootTopic)
-	for _, c := range root.children {
+	for _, c := range children {
 		ch.Attached = append(ch.Attached, outlineNodeToTopics(c))
 	}
 	sheets = append(sheets, sh)
@@ -263,15 +277,27 @@ func firstNonEmptyLineIndex(lines []string) (idx int, ok bool) {
 	return 0, false
 }
 
-func detectOutlineMode(trimmedFirst string) string {
+// newSheetRootFromForest picks the root for a new sheet imported from forest. With rootTitle,
+// that title is the root and every top-level item becomes its child. Without it, a single
+// top-level item is the root (so flatten -> import round-trips), and several top-level items go
+// under a root named defaultImportRootTitle.
+func newSheetRootFromForest(forest []*outlineNode, rootTitle string) (title string, children []*outlineNode) {
 	switch {
-	case strings.HasPrefix(trimmedFirst, "#"):
-		return "heading"
-	case strings.HasPrefix(trimmedFirst, "-") || strings.HasPrefix(trimmedFirst, "*"):
-		return "list"
+	case rootTitle != "":
+		return rootTitle, forest
+	case len(forest) == 1:
+		return forest[0].title, forest[0].children
 	default:
-		return "plain"
+		return defaultImportRootTitle, forest
 	}
+}
+
+// isMarkdownOutline reports whether an outline whose first non-empty line is trimmedFirst is
+// parsed as Markdown (headings and list items) rather than as indented plain text.
+func isMarkdownOutline(trimmedFirst string) bool {
+	return strings.HasPrefix(trimmedFirst, "#") ||
+		strings.HasPrefix(trimmedFirst, "-") ||
+		strings.HasPrefix(trimmedFirst, "*")
 }
 
 func headingHashPrefixLen(s string) int {
@@ -282,40 +308,44 @@ func headingHashPrefixLen(s string) int {
 	return n
 }
 
-func appendOutlinePairHeading(line string, pairs *[]outlinePair) {
+// appendOutlinePairMarkdown classifies one Markdown outline line on its own: ">" lines
+// (flatten_to_outline's note lines) are skipped, "#" lines are headings, and anything else (a
+// list item or plain text) nests under the most recent heading, indented by its leading
+// whitespace. lastHeading tracks that heading's depth (-1 before the first heading).
+func appendOutlinePairMarkdown(line string, lastHeading *int, pairs *[]outlinePair) {
 	s := strings.TrimLeft(line, " \t")
-	if !strings.HasPrefix(s, "#") {
+	switch {
+	case strings.HasPrefix(s, ">"):
 		return
+	case strings.HasPrefix(s, "#"):
+		n := headingHashPrefixLen(s)
+		*lastHeading = n - 1
+		*pairs = append(*pairs, outlinePair{depth: n - 1, title: strings.TrimSpace(s[n:])})
+	default:
+		depth := *lastHeading + 1 + countLeadingSpaceTabs(line)/2
+		*pairs = append(*pairs, outlinePair{depth: depth, title: stripListMarker(s)})
 	}
-	n := headingHashPrefixLen(s)
-	if n == 0 {
-		return
-	}
-	rest := strings.TrimSpace(s[n:])
-	*pairs = append(*pairs, outlinePair{depth: n - 1, title: rest})
 }
 
-func appendOutlinePairList(line string, pairs *[]outlinePair) {
-	lead := countLeadingSpaceTabs(line)
-	s := strings.TrimLeft(line, " \t")
-	var title string
+// stripListMarker removes a leading "- " or "* " list marker (or a lone "-" / "*") and trims.
+func stripListMarker(s string) string {
 	switch {
-	case strings.HasPrefix(s, "- "):
-		title = strings.TrimSpace(s[2:])
-	case strings.HasPrefix(s, "* "):
-		title = strings.TrimSpace(s[2:])
+	case strings.HasPrefix(s, "- "), strings.HasPrefix(s, "* "):
+		return strings.TrimSpace(s[2:])
 	case s == "-" || s == "*":
-		title = ""
+		return ""
 	default:
-		return
+		return strings.TrimSpace(s)
 	}
-	*pairs = append(*pairs, outlinePair{depth: lead / 2, title: title})
 }
 
 func appendOutlinePairPlain(line string, pairs *[]outlinePair) {
-	lead := countLeadingSpaceTabs(line)
 	title := strings.TrimSpace(line)
-	*pairs = append(*pairs, outlinePair{depth: lead / 2, title: title})
+	// Skip flatten_to_outline's text-format note lines.
+	if title == "[note]" || strings.HasPrefix(title, "[note] ") {
+		return
+	}
+	*pairs = append(*pairs, outlinePair{depth: countLeadingSpaceTabs(line) / 2, title: title})
 }
 
 func parseOutlineToPairs(outline string) []outlinePair {
@@ -324,19 +354,17 @@ func parseOutlineToPairs(outline string) []outlinePair {
 	if !ok {
 		return nil
 	}
-	mode := detectOutlineMode(strings.TrimLeft(lines[firstIdx], " \t"))
+	markdown := isMarkdownOutline(strings.TrimLeft(lines[firstIdx], " \t"))
 
 	var pairs []outlinePair
+	lastHeading := -1
 	for _, line := range lines[firstIdx:] {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		switch mode {
-		case "heading":
-			appendOutlinePairHeading(line, &pairs)
-		case "list":
-			appendOutlinePairList(line, &pairs)
-		case "plain":
+		if markdown {
+			appendOutlinePairMarkdown(line, &lastHeading, &pairs)
+		} else {
 			appendOutlinePairPlain(line, &pairs)
 		}
 	}
@@ -371,34 +399,6 @@ func normalizeOutlineDepths(pairs []outlinePair) {
 	for i := range pairs {
 		pairs[i].depth -= minD
 	}
-}
-
-// buildOutlineTreeSingleRoot: first depth-0 is root; further depth-0 become children of that root.
-func buildOutlineTreeSingleRoot(pairs []outlinePair) *outlineNode {
-	if len(pairs) == 0 {
-		return nil
-	}
-	root := &outlineNode{title: pairs[0].title}
-	stack := []*outlineNode{root}
-	for i := 1; i < len(pairs); i++ {
-		d, title := pairs[i].depth, pairs[i].title
-		node := &outlineNode{title: title}
-		if d == 0 {
-			for len(stack) > 1 {
-				stack = stack[:len(stack)-1]
-			}
-			root.children = append(root.children, node)
-			stack = []*outlineNode{root, node}
-			continue
-		}
-		for len(stack) > d {
-			stack = stack[:len(stack)-1]
-		}
-		parent := stack[len(stack)-1]
-		parent.children = append(parent.children, node)
-		stack = append(stack, node)
-	}
-	return root
 }
 
 // buildOutlineForest: each depth-0 line starts a new top-level tree.

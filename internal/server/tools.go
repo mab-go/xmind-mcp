@@ -363,12 +363,18 @@ var toolFlattenToOutline = mcp.NewTool(
 
 var toolImportFromOutline = mcp.NewTool(
 	"xmind_import_from_outline",
-	mcp.WithDescription("Parse indented text or Markdown outline and attach topics to a sheet or parent. Omit sheet_id to create a new sheet; parent_id requires sheet_id."),
+	mcp.WithDescription(
+		"Parse indented text or Markdown outline and attach topics to a sheet or parent. Omit sheet_id to create a new sheet; parent_id requires sheet_id. "+
+			"Markdown outlines may mix headings, list items, and text lines; items nest under the preceding heading. "+
+			"Note lines written by xmind_flatten_to_outline (\"> \" in Markdown, \"[note]\" in plain text) are skipped. "+
+			"New sheet: a single top-level item becomes the root; several top-level items go under a root named \"Imported Outline\" unless root_title is set.",
+	),
 	withAnnotations("Import from Outline", effectAdditive),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
-	mcp.WithString("outline", mcp.Required(), mcp.Description("Outline text (Markdown headings, list, or indented plain text)")),
+	mcp.WithString("outline", mcp.Required(), mcp.Description("Outline text (Markdown headings and/or list items, or indented plain text)")),
 	mcp.WithString("sheet_id", mcp.Description("Target sheet; omit to append a new sheet")),
 	mcp.WithString("parent_id", mcp.Description("Parent topic; omit to use sheet root (only valid when sheet_id is set)")),
+	mcp.WithString("root_title", mcp.Description(`New-sheet imports only (omit sheet_id): title for the new sheet and its root topic, with every top-level outline item as its child. Without it, a single top-level item becomes the root and several top-level items go under a root named "Imported Outline".`)),
 )
 
 var toolFindAndReplace = mcp.NewTool(
