@@ -2655,15 +2655,16 @@ func readFileBytes(t *testing.T, path string) []byte {
 	return b
 }
 
-// TestIdempotentToolsRepeatDoesNotWrite checks the tools annotated idempotentHint: true leave
-// the file byte-identical (no new revisionId, no rewrite) when a call is repeated.
-func TestIdempotentToolsRepeatDoesNotWrite(t *testing.T) {
-	h := NewXMindHandler()
-	tests := []struct {
-		name string
-		fn   func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
-		args func(path, sheetID, rootID string, ids []string) map[string]any
-	}{
+// idempotentToolCase is a call to a tool annotated idempotentHint: true that changes a map
+// built by newABCMap the first time it runs.
+type idempotentToolCase struct {
+	name string
+	fn   func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	args func(path, sheetID, rootID string, ids []string) map[string]any
+}
+
+func idempotentToolCases(h *XMindHandler) []idempotentToolCase {
+	return []idempotentToolCase{
 		{"rename_topic", h.RenameTopic, func(path, sheetID, _ string, ids []string) map[string]any {
 			return map[string]any{"path": path, "sheet_id": sheetID, "topic_id": ids[0], "title": "A2"}
 		}},
@@ -2680,7 +2681,13 @@ func TestIdempotentToolsRepeatDoesNotWrite(t *testing.T) {
 			return map[string]any{"path": path, "sheet_id": sheetID, "topic_ids": []any{ids[0], ids[1]}, "labels": []any{"x"}}
 		}},
 	}
-	for _, tc := range tests {
+}
+
+// TestIdempotentToolsRepeatDoesNotWrite checks the tools annotated idempotentHint: true leave
+// the file byte-identical (no new revisionId, no rewrite) when a call is repeated.
+func TestIdempotentToolsRepeatDoesNotWrite(t *testing.T) {
+	h := NewXMindHandler()
+	for _, tc := range idempotentToolCases(h) {
 		t.Run(tc.name, func(t *testing.T) {
 			path, sheetID, rootID, ids := newABCMap(t, h)
 			args := tc.args(path, sheetID, rootID, ids)
@@ -2706,6 +2713,69 @@ func TestIdempotentToolsRepeatDoesNotWrite(t *testing.T) {
 				t.Error("repeat call rewrote the file")
 			}
 		})
+	}
+}
+
+// TestIdempotentToolsWriteFailure makes the map's directory read-only, so committing fails. A
+// call that changes the map must return a protocol error and leave the file as it was; a repeat
+// of a call already applied must still succeed, since it does not write.
+func TestIdempotentToolsWriteFailure(t *testing.T) {
+	h := NewXMindHandler()
+	for _, tc := range idempotentToolCases(h) {
+		t.Run(tc.name, func(t *testing.T) {
+			path, sheetID, rootID, ids := newABCMap(t, h)
+			args := tc.args(path, sheetID, rootID, ids)
+			before := readFileBytes(t, path)
+
+			dir := filepath.Dir(path)
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+			if err := os.Chmod(dir, 0o555); err != nil {
+				t.Fatal(err)
+			}
+
+			req := mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: args}}
+			if _, err := tc.fn(context.Background(), req); err == nil || !strings.Contains(err.Error(), "write map") {
+				t.Fatalf("changing call in read-only dir: err = %v, want write map error", err)
+			}
+			if !bytes.Equal(before, readFileBytes(t, path)) {
+				t.Fatal("failed write changed the file")
+			}
+
+			if err := os.Chmod(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if res := callTool(t, tc.fn, args); res.IsError {
+				t.Fatalf("first call: %s", textContent(t, res))
+			}
+			if err := os.Chmod(dir, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			if res := callTool(t, tc.fn, args); res.IsError {
+				t.Fatalf("repeat call in read-only dir: %s", textContent(t, res))
+			}
+		})
+	}
+}
+
+// TestSetTopicPropertiesBulkInvalidPropertyNoWrite checks that a property error found while
+// applying updates leaves the file untouched, even after earlier topics were updated in memory.
+func TestSetTopicPropertiesBulkInvalidPropertyNoWrite(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, _, ids := newABCMap(t, h)
+	before := readFileBytes(t, path)
+
+	res := callTool(t, h.SetTopicPropertiesBulk, map[string]any{
+		"path": path, "sheet_id": sheetID, "topic_ids": []any{ids[0], ids[1]},
+		"notes": "n", "labels": "not-an-array",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for non-array labels")
+	}
+	if msg := textContent(t, res); !strings.Contains(msg, "labels: expected an array") {
+		t.Errorf("error message = %q", msg)
+	}
+	if !bytes.Equal(before, readFileBytes(t, path)) {
+		t.Error("failed bulk update rewrote the file")
 	}
 }
 

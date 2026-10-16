@@ -787,6 +787,36 @@ func TestImportFromOutlineRootTitleWithSheetIDError(t *testing.T) {
 	}
 }
 
+func TestImportFromOutlineRootTitleNotString(t *testing.T) {
+	h := NewXMindHandler()
+	path := filepath.Join(t.TempDir(), "rt-type.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	res := callTool(t, h.ImportFromOutline, map[string]any{
+		"path": path, "outline": "- x", "root_title": float64(1),
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error for non-string root_title")
+	}
+	if msg := textContent(t, res); !strings.Contains(msg, "root_title") {
+		t.Errorf("error message = %q", msg)
+	}
+}
+
+func TestStripListMarker(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"- item", "item"},
+		{"* item ", "item"},
+		{"-", ""},
+		{"*", ""},
+		{"-item", "-item"},
+		{"plain text", "plain text"},
+	} {
+		if got := stripListMarker(tc.in); got != tc.want {
+			t.Errorf("stripListMarker(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // TestFlattenImportRoundTripWithNotes checks that the note lines flatten_to_outline writes
 // with include_notes ("> " in Markdown, "[note]" in text) do not become topics on import.
 func TestFlattenImportRoundTripWithNotes(t *testing.T) {
