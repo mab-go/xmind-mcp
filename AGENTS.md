@@ -31,10 +31,11 @@ cmd/
 internal/
   server/
     server.go             — MCP server setup and tool registration
-    server_test.go        — asserts server capabilities (no MCP logging)
+    server_test.go        — asserts server capabilities (no MCP logging) and panic recovery
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints
     hooks.go              — MCP lifecycle hooks (before/after initialize)
+    recovery.go           — tool-handler middleware: recovers panics, logs tool.panic with a stack trace
     events.go             — logging event-name constants (logging.Event)
     handler/
       handler.go          — XMindHandler struct and shared utilities (textResult, jsonResult, etc.)
@@ -390,6 +391,10 @@ The signature is `(nil, error)`. These surface as MCP protocol errors and look l
 
 **Rule of thumb:** if the caller could fix it by passing different arguments or pointing at a different file, it's a tool error. If something has gone wrong inside the server that the caller can't influence, it's a protocol error.
 
+### Panics
+
+`recoverToolPanics` (`recovery.go`, registered in `server.go`) recovers a panic in any tool handler, logs `tool.panic` at Error level with a stack trace, and returns it as a protocol error, so one bad call cannot kill the stdio server. It is a safety net, not control flow: handlers must never panic on purpose. Return a tool error or a protocol error instead.
+
 ---
 
 ## Schema Critical Notes
@@ -476,7 +481,7 @@ The codebase is organized in layers. When making changes, understand which layer
 | Schema | `internal/xmind/types.go`, `json_codec.go` | stdlib only |
 | I/O | `internal/xmind/reader.go`, `writer.go`, `atomic_replace.go` | Schema layer |
 | Handlers | `internal/server/handler/*.go` | I/O layer, Schema layer |
-| Server wiring | `internal/server/server.go`, `tools.go`, `hooks.go` | Handlers |
+| Server wiring | `internal/server/server.go`, `tools.go`, `hooks.go`, `recovery.go` | Handlers |
 | Entry point | `cmd/xmind-mcp/main.go` | Server wiring |
 
 Changes to the Schema layer (adding/removing struct fields, modifying codec allowlists) will ripple into handlers. Changes to handlers are self-contained as long as the I/O layer API is stable. Never import handler packages from the xmind package or vice versa.

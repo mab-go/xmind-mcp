@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/mab-go/logging"
 	"github.com/mab-go/xmind-mcp/internal/server/handler"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -47,5 +50,40 @@ func TestServerDoesNotAdvertiseLogging(t *testing.T) {
 	errObj, _ := resp["error"].(map[string]any)
 	if code, _ := errObj["code"].(float64); code != float64(mcp.METHOD_NOT_FOUND) {
 		t.Errorf("logging/setLevel response = %v, want error code %d", resp, mcp.METHOD_NOT_FOUND)
+	}
+}
+
+// TestToolHandlerPanicIsRecovered checks a panic in a tool handler becomes an internal-error
+// response and a tool.panic log entry with a stack trace, instead of crashing the server.
+func TestToolHandlerPanicIsRecovered(t *testing.T) {
+	var buf bytes.Buffer
+	log := logging.NewLogger(logging.Config{Level: logging.DebugLevel, Output: &buf})
+	s := newXMindServer(logging.NewContext(context.Background(), log), handler.NewXMindHandler())
+	s.AddTool(mcp.NewTool("panic_probe"), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		panic("boom")
+	})
+
+	handleJSON(t, s, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`)
+	resp := handleJSON(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"panic_probe","arguments":{}}}`)
+
+	errObj, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("tools/call response = %v, want an error", resp)
+	}
+	if code, _ := errObj["code"].(float64); code != float64(mcp.INTERNAL_ERROR) {
+		t.Errorf("error code = %v, want %d", errObj["code"], mcp.INTERNAL_ERROR)
+	}
+	msg, _ := errObj["message"].(string)
+	for _, want := range []string{"panic_probe", "boom"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error message = %q, want it to contain %q", msg, want)
+		}
+	}
+
+	logged := buf.String()
+	for _, want := range []string{"level=ERROR", "event=tool.panic", "tool=panic_probe", "panic=boom", "goroutine "} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log output = %q, want it to contain %q", logged, want)
+		}
 	}
 }
