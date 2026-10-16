@@ -33,7 +33,7 @@ internal/
     server.go             — MCP server setup and tool registration
     server_test.go        — asserts server capabilities (no MCP logging), instructions, server/discover, lifecycle hook logging, and panic recovery
     tools.go              — tool definitions as package-level var declarations
-    tools_test.go         — asserts every tool's title and annotation hints
+    tools_test.go         — asserts every tool's title and annotation hints, and that whole-number parameters are declared as non-negative integers
     output_schema_test.go — asserts which tools declare an outputSchema and that their structured output matches it
     hooks.go              — MCP lifecycle hooks (initialize and server/discover)
     recovery.go           — tool-handler middleware: recovers panics, logs tool.panic with a stack trace
@@ -166,6 +166,8 @@ Every tool must declare its display title and MCP behavior hints with `withAnnot
 `openWorldHint` is always `false`: every tool touches only the local file named by `path`. The `toolEffect` zero value is invalid and an unknown effect makes `withAnnotations` panic; since tools are package-level vars, that fails every test in the package and stops the binary at startup. When adding an effect, add a `case` for it. Add each new tool to `expectedAnnotations` in `internal/server/tools_test.go`; the test fails for any registered tool missing from that table.
 
 A tool whose handler returns `jsonResult` must also declare its output schema with `handler.OutputSchema[handler.<Type>]()`, right after `withAnnotations`. `<Type>` is the exported struct the handler passes to `jsonResult` (e.g. `handler.OpenMapResponse`). Add the tool to `jsonOutputTools` in `internal/server/output_schema_test.go`, and add cases to `TestStructuredOutputMatchesSchema` that cover each success return path. Clients may check results against the schema, so a wrong schema on a writing tool can look like a failure after the file was saved. `OutputSchema` builds the schema with `jsonschema.For`, which requires fields without `omitempty` and rejects keys the struct does not name. A recursive type, or a type with custom JSON (like `xmind.Marker`, which writes back unknown keys), needs an entry in `outputTypeSchemas` in `handler/schema.go`. Like `withAnnotations`, `OutputSchema` panics on a schema error.
+
+Declare a parameter that must be a whole number (an index, depth, or count) with `mcp.WithInteger(..., mcp.Min(0))`, never `mcp.WithNumber`, so the schema tells the model up front. Still parse it with `requireNonNegativeInt` or an equivalent whole-number check: the server does not validate input against the schema, and JSON numbers arrive as `float64`. Add the parameter to `nonNegativeIntParams` in `internal/server/tools_test.go`; the test fails for any number or integer parameter missing from that table. A signed or fractional parameter would need the test extended.
 
 Register them in `server.go`:
 
