@@ -31,6 +31,7 @@ cmd/
 internal/
   server/
     server.go             — MCP server setup and tool registration
+    server_test.go        — asserts server capabilities (no MCP logging)
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints
     hooks.go              — MCP lifecycle hooks (before/after initialize)
@@ -310,6 +311,9 @@ with the `--log-level` flag or the `XMIND_MCP_LOG_LEVEL` env var
 (`debug`/`info`/`warn`/`error`); `parseLogLevel` in `main.go` rejects unknown
 values. Reserve `Info` for events visible at the default level (e.g.
 `server.ready`, `server.stopped`); keep routine per-connection detail at `Debug`.
+The server does not declare the MCP `logging` capability (no
+`mcpserver.WithLogging()`): it never sends `notifications/message`, and MCP spec
+2026-07-28 deprecates MCP logging in favor of stderr. Don't re-add it.
 
 ### main.go
 
