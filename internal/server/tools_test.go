@@ -60,9 +60,12 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 				t.Fatalf("tool %q has no entry in expectedAnnotations", name)
 			}
 
+			if st.Tool.Title != want.title {
+				t.Errorf("title = %q, want %q", st.Tool.Title, want.title)
+			}
 			a := st.Tool.Annotations
 			if a.Title != want.title {
-				t.Errorf("title = %q, want %q", a.Title, want.title)
+				t.Errorf("annotations.title = %q, want %q", a.Title, want.title)
 			}
 			checkHint(t, "readOnlyHint", a.ReadOnlyHint, want.readOnly)
 			checkHint(t, "destructiveHint", a.DestructiveHint, want.destructive)

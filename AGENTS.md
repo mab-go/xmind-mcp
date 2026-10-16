@@ -151,7 +151,7 @@ var toolOpenMap = mcp.NewTool(
 )
 ```
 
-Every tool must declare its display title and MCP behavior hints with `withAnnotations(title, effect)` (defined in `tools.go`), placed right after `mcp.WithDescription`. This is mandatory: without it, `mcp.NewTool` defaults every tool to destructive and open-world, so clients can't auto-approve reads. Pick the `toolEffect`:
+Every tool must declare its display title and MCP behavior hints with `withAnnotations(title, effect)` (defined in `tools.go`), placed right after `mcp.WithDescription`. This is mandatory: without it, `mcp.NewTool` defaults every tool to destructive and open-world, so clients can't auto-approve reads. The title is set both as the tool's top-level `title` and as `annotations.title`, for clients that read only one of them. Pick the `toolEffect`:
 
 | Effect | Use when the tool… |
 |---|---|
