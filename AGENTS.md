@@ -59,10 +59,7 @@ testdata/
   kitchen-sink.xmind      — primary test fixture; exercises every supported feature
 .agents/
   skills/
-    ask-questions/         — structured question-gathering with tiered unknowns
     commit-message/        — Git commit message generation from diffs
-    explore-codebase/      — systematic pre-implementation codebase exploration
-    make-todos/            — structured task list creation and tracking
     review-plan/           — plan review for accuracy, correctness, and task items
     verify-changes/        — build/test/lint verification and doc update checks
     xmind-mcp-smoke-test/  — release pre-validation: exercises the full MCP tool surface against a scratch .xmind
