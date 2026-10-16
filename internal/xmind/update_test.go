@@ -328,3 +328,79 @@ func TestOpenMapForUpdateErrorParity(t *testing.T) {
 		assertOpenErrorParity(t, noContent)
 	})
 }
+
+// assertOnlyEntry fails unless dir contains exactly one entry, named name (so no temp file
+// was left behind there).
+func assertOnlyEntry(t *testing.T, dir, name string) {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 1 || ents[0].Name() != name {
+		names := make([]string, 0, len(ents))
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("%s: entries %v, want only %q", dir, names, name)
+	}
+}
+
+// assertWriteThroughSymlink checks that writing via link updated target (its root title is
+// now want) and left link a symlink, with no temp files in either directory.
+func assertWriteThroughSymlink(t *testing.T, target, link, want string) {
+	t.Helper()
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is no longer a symlink (mode %v)", link, fi.Mode())
+	}
+	sheets, err := ReadMap(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sheets[0].RootTopic.Title; got != want {
+		t.Fatalf("real file root title = %q, want %q", got, want)
+	}
+	assertOnlyEntry(t, filepath.Dir(target), filepath.Base(target))
+	assertOnlyEntry(t, filepath.Dir(link), filepath.Base(link))
+}
+
+// newSymlinkedMap copies the fixture into one temp dir and links to it from another,
+// returning (target, link). It skips the test where symlinks are unavailable.
+func newSymlinkedMap(t *testing.T) (target, link string) {
+	t.Helper()
+	target = copyKitchenSink(t)
+	link = filepath.Join(t.TempDir(), "link.xmind")
+	symlinkOrSkip(t, target, link)
+	return target, link
+}
+
+func TestCommitWritesThroughSymlink(t *testing.T) {
+	target, link := newSymlinkedMap(t)
+	sheets, mw, err := OpenMapForUpdate(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mw.Close() }()
+	sheets[0].RootTopic.Title = "Changed via link"
+	if err := mw.Commit(sheets); err != nil {
+		t.Fatal(err)
+	}
+	assertWriteThroughSymlink(t, target, link, "Changed via link")
+}
+
+func TestWriteMapWritesThroughSymlink(t *testing.T) {
+	target, link := newSymlinkedMap(t)
+	sheets, err := ReadMap(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheets[0].RootTopic.Title = "Changed via link"
+	if err := WriteMap(link, sheets); err != nil {
+		t.Fatal(err)
+	}
+	assertWriteThroughSymlink(t, target, link, "Changed via link")
+}

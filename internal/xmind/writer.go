@@ -140,8 +140,17 @@ func finishZipTempFile(zw *zip.Writer, tmp *os.File, tmpPath, dst string) error 
 }
 
 // WriteMap replaces content.json in an existing .xmind zip, preserving all other entries
-// via raw compressed-byte copy (OpenRaw / CreateRaw).
+// via raw compressed-byte copy (OpenRaw / CreateRaw). It writes through a symlink to the
+// real file.
+//
+// WriteMap holds the file's in-process write lock (see lockPath) while it re-reads the
+// entries and swaps the file, so it never interleaves with a MapWriter's Commit. The lock
+// does not cover the caller's own earlier read of sheets: a read-modify-write cycle that
+// must not lose concurrent updates belongs in OpenMapForUpdate and Commit.
 func WriteMap(path string, sheets []Sheet) error {
+	target, unlock := lockPath(path)
+	defer unlock()
+
 	oldZR, oldFile, err := openZipReaderAtPath(path)
 	if err != nil {
 		return err
@@ -153,7 +162,7 @@ func WriteMap(path string, sheets []Sheet) error {
 		}
 	}()
 
-	return writeMapBody(path, sheets, oldZR, func() error {
+	return writeMapBody(target, sheets, oldZR, func() error {
 		closed = true
 		return oldFile.Close()
 	})
@@ -161,17 +170,20 @@ func WriteMap(path string, sheets []Sheet) error {
 
 // writeMapBody serializes sheets into a new content.json and writes a fresh .xmind zip
 // at a temp path, raw-copying every non-content.json entry from zr, then atomically
-// swaps it into path. releaseSource is invoked once the entry copy is complete (and
-// before the atomic swap) so the caller can close the source handle that backs zr;
+// swaps it into dst. dst must already be symlink-resolved (the path lockPath returned):
+// the temp file is created in dst's directory and renamed onto dst, so resolving first
+// keeps the rename on one filesystem and updates the real file instead of replacing a
+// symlink with a regular file. releaseSource is invoked once the entry copy is complete
+// (and before the atomic swap) so the caller can close the source handle that backs zr;
 // this lets the swap run with no open handle on the original. On any failure the temp
 // file is removed and the original is left untouched.
-func writeMapBody(path string, sheets []Sheet, zr *zip.Reader, releaseSource func() error) error {
+func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func() error) error {
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
 		return fmt.Errorf("marshal content.json: %w", err)
 	}
 
-	dir := filepath.Dir(path)
+	dir := filepath.Dir(dst)
 	tmp, err := os.CreateTemp(dir, ".xmind-tmp-*")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
@@ -204,7 +216,7 @@ func writeMapBody(path string, sheets []Sheet, zr *zip.Reader, releaseSource fun
 		}
 	}
 
-	if err := finishZipTempFile(zw, tmp, tmpPath, path); err != nil {
+	if err := finishZipTempFile(zw, tmp, tmpPath, dst); err != nil {
 		return err
 	}
 	swapped = true
@@ -218,7 +230,15 @@ func writeMapBody(path string, sheets []Sheet, zr *zip.Reader, releaseSource fun
 // file that already exists (or appears concurrently) is left alone and the returned error
 // wraps fs.ErrExist. The finished temp file is then renamed over that empty placeholder;
 // on any failure the placeholder is removed.
+//
+// It holds the file's in-process write lock (see lockPath) from before the claim until
+// the rename or cleanup, so a concurrent OpenMapForUpdate never opens the empty
+// placeholder; it waits and then sees the finished map. Readers take no lock and can
+// still see the placeholder.
 func CreateNewMap(path string, sheets []Sheet) error {
+	_, unlock := lockPath(path)
+	defer unlock()
+
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
 		return fmt.Errorf("marshal content.json: %w", err)
