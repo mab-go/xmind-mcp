@@ -46,7 +46,7 @@ func TestListSheetsKitchenSink(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected tool error: %s", textContent(t, res))
 	}
-	var out listSheetsResponse
+	var out ListSheetsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -78,7 +78,7 @@ func assertOpenMapListsOneSheet(t *testing.T, h *XMindHandler, path, wantSheetTi
 	if openRes.IsError {
 		t.Fatalf("OpenMap after CreateMap: %s", textContent(t, openRes))
 	}
-	var om openMapResponse
+	var om OpenMapResponse
 	if err := json.Unmarshal([]byte(textContent(t, openRes)), &om); err != nil {
 		t.Fatalf("OpenMap unmarshal: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestOpenMapKitchenSink(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("OpenMap: %s", textContent(t, res))
 	}
-	var om openMapResponse
+	var om OpenMapResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &om); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestDeleteLastSheetError(t *testing.T) {
 	}
 }
 
-func mustListRelationshipsJSON(t *testing.T, h *XMindHandler, path, sheetID string) listRelationshipsResponse {
+func mustListRelationshipsJSON(t *testing.T, h *XMindHandler, path, sheetID string) ListRelationshipsResponse {
 	t.Helper()
 	res := callTool(t, h.ListRelationships, map[string]any{
 		"path": path, "sheet_id": sheetID,
@@ -281,14 +281,14 @@ func mustListRelationshipsJSON(t *testing.T, h *XMindHandler, path, sheetID stri
 	if res.IsError {
 		t.Fatalf("unexpected tool error: %s", textContent(t, res))
 	}
-	var out listRelationshipsResponse
+	var out ListRelationshipsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	return out
 }
 
-func assertKitchenSinkRelationshipListHeader(t *testing.T, out *listRelationshipsResponse, wantSheetID string, wantRelCount int) {
+func assertKitchenSinkRelationshipListHeader(t *testing.T, out *ListRelationshipsResponse, wantSheetID string, wantRelCount int) {
 	t.Helper()
 	if out.SheetID != wantSheetID {
 		t.Fatalf("sheetId: got %q want %q", out.SheetID, wantSheetID)
@@ -326,7 +326,7 @@ func findKitchenSinkSheetByID(t *testing.T, path, sheetID string) *xmind.Sheet {
 	return nil
 }
 
-func assertFirstRelationshipMatchesSheet(t *testing.T, sh *xmind.Sheet, out *listRelationshipsResponse) {
+func assertFirstRelationshipMatchesSheet(t *testing.T, sh *xmind.Sheet, out *ListRelationshipsResponse) {
 	t.Helper()
 	if len(sh.Relationships) != len(out.Relationships) {
 		t.Fatalf("ReadMap rel count %d vs list %d", len(sh.Relationships), len(out.Relationships))
@@ -372,7 +372,7 @@ func TestListRelationshipsEmptySheet(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected tool error: %s", textContent(t, res))
 	}
-	var out listRelationshipsResponse
+	var out ListRelationshipsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

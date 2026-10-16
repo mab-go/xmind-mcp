@@ -201,7 +201,9 @@ environments. Each tool also carries MCP annotations (a display title plus
 read-only, destructive, and idempotent hints), so clients can auto-approve
 reads and ask before destructive edits. The server also sends short usage
 instructions when a client connects; clients that support them add them to the
-model's context.
+model's context. Tools that return JSON also declare an output schema and
+return the same data as `structuredContent`, so clients that support MCP
+structured output can use it without parsing text.
 
 ### Tier 1: File & Sheet Management
 

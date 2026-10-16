@@ -34,6 +34,7 @@ internal/
     server_test.go        — asserts server capabilities (no MCP logging), instructions, server/discover, lifecycle hook logging, and panic recovery
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints
+    output_schema_test.go — asserts which tools declare an outputSchema and that their structured output matches it
     hooks.go              — MCP lifecycle hooks (initialize and server/discover)
     recovery.go           — tool-handler middleware: recovers panics, logs tool.panic with a stack trace
     instructions.go       — server instructions sent in the initialize and server/discover results
@@ -41,6 +42,7 @@ internal/
     handler/
       handler.go          — XMindHandler struct and shared utilities (textResult, jsonResult, etc.)
       handler_test.go     — tests for handler helpers (e.g. deepCloneTopic)
+      schema.go           — OutputSchema[T]: outputSchema tool option generated from a response type
       sheets.go           — handlers for Tier 1: file & sheet management tools
       find.go             — handlers for Tier 2: search/find tools
       mutate.go           — handlers for Tier 3: topic mutation tools
@@ -163,6 +165,8 @@ Every tool must declare its display title and MCP behavior hints with `withAnnot
 
 `openWorldHint` is always `false`: every tool touches only the local file named by `path`. The `toolEffect` zero value is invalid and an unknown effect makes `withAnnotations` panic; since tools are package-level vars, that fails every test in the package and stops the binary at startup. When adding an effect, add a `case` for it. Add each new tool to `expectedAnnotations` in `internal/server/tools_test.go`; the test fails for any registered tool missing from that table.
 
+A tool whose handler returns `jsonResult` must also declare its output schema with `handler.OutputSchema[handler.<Type>]()`, right after `withAnnotations`. `<Type>` is the exported struct the handler passes to `jsonResult` (e.g. `handler.OpenMapResponse`). Add the tool to `jsonOutputTools` in `internal/server/output_schema_test.go`, and add cases to `TestStructuredOutputMatchesSchema` that cover each success return path. Clients may check results against the schema, so a wrong schema on a writing tool can look like a failure after the file was saved. `OutputSchema` builds the schema with `jsonschema.For`, which requires fields without `omitempty` and rejects keys the struct does not name. A recursive type, or a type with custom JSON (like `xmind.Marker`, which writes back unknown keys), needs an entry in `outputTypeSchemas` in `handler/schema.go`. Like `withAnnotations`, `OutputSchema` panics on a schema error.
+
 Register them in `server.go`:
 
 ```go
@@ -276,7 +280,7 @@ func textResult(text string) *mcp.CallToolResult {
 }
 ```
 
-Use `jsonResult` when the successful response body should be JSON (e.g. structured data from mutating operations):
+Use `jsonResult` whenever the successful response body is JSON; do not marshal by hand. It returns the JSON as text and the same value as the result's `structuredContent`, so the tool must declare an output schema (see Tool definitions):
 
 ```go
 func jsonResult(v any) (*mcp.CallToolResult, error) {
@@ -284,9 +288,13 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
     if err != nil {
         return nil, fmt.Errorf("marshal response: %w", err)
     }
-    return textResult(string(data)), nil
+    res := textResult(string(data))
+    res.StructuredContent = v
+    return res, nil
 }
 ```
+
+When a handler writes the map, call `jsonResult` before `mw.Commit` if the response is fully known by then (as `finishFindReplace` does), so a marshal failure never follows a write.
 
 ### Shared traversal and lookup utilities
 
@@ -353,14 +361,18 @@ var cmd = &cobra.Command{
 Use only these external dependencies — do not add others without good reason:
 
 ```
+github.com/google/jsonschema-go
 github.com/google/uuid
 github.com/mab-go/logging
 github.com/mark3labs/mcp-go
+github.com/santhosh-tekuri/jsonschema/v6
 github.com/spf13/cobra
 github.com/spf13/viper
 ```
 
 `github.com/spf13/pflag` is pulled in transitively by `cobra` and `viper`; do not import it directly.
+
+`github.com/google/jsonschema-go` generates tool output schemas (`handler/schema.go`) and `github.com/santhosh-tekuri/jsonschema/v6` validates tool output in tests only. mcp-go already requires both, so keep them at the versions it requires.
 
 For zip and JSON handling, use Go stdlib only: `archive/zip` and `encoding/json`.
 

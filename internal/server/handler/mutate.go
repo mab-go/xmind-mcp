@@ -21,13 +21,15 @@ import (
 const maxBulkTopicsDepth = 64
 const maxBulkTopicsTotal = 10000
 
-type addTopicResponse struct {
+// AddTopicResponse is the JSON shape returned by xmind_add_topic.
+type AddTopicResponse struct {
 	ID           string `json:"id"`
 	Position     int    `json:"position"`
 	SiblingCount int    `json:"siblingCount"`
 }
 
-type addTopicsBulkResponse struct {
+// AddTopicsBulkResponse is the JSON shape returned by xmind_add_topics_bulk.
+type AddTopicsBulkResponse struct {
 	AddedCount    int      `json:"addedCount"`
 	ParentID      string   `json:"parentId"`
 	FirstPosition int      `json:"firstPosition"`
@@ -35,7 +37,8 @@ type addTopicsBulkResponse struct {
 	RootTopicIDs  []string `json:"rootTopicIds"`
 }
 
-type duplicateTopicResponse struct {
+// DuplicateTopicResponse is the JSON shape returned by xmind_duplicate_topic.
+type DuplicateTopicResponse struct {
 	SourceID     string `json:"sourceId"`
 	NewRootID    string `json:"newRootId"`
 	ParentID     string `json:"parentId"`
@@ -44,7 +47,8 @@ type duplicateTopicResponse struct {
 	SiblingCount int    `json:"siblingCount"`
 }
 
-type moveTopicResponse struct {
+// MoveTopicResponse is the JSON shape returned by xmind_move_topic.
+type MoveTopicResponse struct {
 	TopicID      string `json:"topicId"`
 	ParentID     string `json:"parentId"`
 	Position     int    `json:"position"`
@@ -482,7 +486,7 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	return jsonResult(addTopicResponse{
+	return jsonResult(AddTopicResponse{
 		ID:           topic.ID,
 		Position:     insertIdx,
 		SiblingCount: len(parent.Children.Attached),
@@ -545,7 +549,7 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	return jsonResult(duplicateTopicResponse{
+	return jsonResult(DuplicateTopicResponse{
 		SourceID:     topicID,
 		NewRootID:    newRootID,
 		ParentID:     targetParentID,
@@ -601,7 +605,7 @@ func (h *XMindHandler) AddTopicsBulk(ctx context.Context, req mcp.CallToolReques
 	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	return jsonResult(addTopicsBulkResponse{
+	return jsonResult(AddTopicsBulkResponse{
 		AddedCount:    count,
 		ParentID:      parentID,
 		FirstPosition: prevLen,
@@ -805,7 +809,7 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 		return terr, nil
 	}
 	if idx, n, ok := moveIsNoOp(&sh.RootTopic, topicID, newParentID, pos); ok {
-		return jsonResult(moveTopicResponse{TopicID: topicID, ParentID: newParentID, Position: idx, SiblingCount: n})
+		return jsonResult(MoveTopicResponse{TopicID: topicID, ParentID: newParentID, Position: idx, SiblingCount: n})
 	}
 
 	removed, rerr := detachTopicFromTree(&sh.RootTopic, topicID)
@@ -822,7 +826,7 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	return jsonResult(moveTopicResponse{
+	return jsonResult(MoveTopicResponse{
 		TopicID:      topicID,
 		ParentID:     newParentID,
 		Position:     moveInsertIdx,

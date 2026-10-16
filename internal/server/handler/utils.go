@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -578,21 +577,24 @@ func findReplaceRunOnSheets(sheetsToUpdate []*xmind.Sheet, findStr, replaceStr s
 	return changes
 }
 
+// FindAndReplaceResponse is the JSON shape returned by xmind_find_and_replace.
+type FindAndReplaceResponse struct {
+	ChangedCount int                 `json:"changedCount"`
+	Changes      []findReplaceChange `json:"changes"`
+}
+
 func finishFindReplace(mw *xmind.MapWriter, sheets []xmind.Sheet, changes []findReplaceChange) (*mcp.CallToolResult, error) {
-	resp := struct {
-		ChangedCount int                 `json:"changedCount"`
-		Changes      []findReplaceChange `json:"changes"`
-	}{ChangedCount: len(changes), Changes: changes}
-	out, err := json.Marshal(resp)
+	// Build the result before committing, so a marshal failure never follows a write.
+	res, err := jsonResult(FindAndReplaceResponse{ChangedCount: len(changes), Changes: changes})
 	if err != nil {
-		return nil, fmt.Errorf("marshal find_and_replace response: %w", err)
+		return nil, err
 	}
 	if len(changes) > 0 {
 		if err := mw.Commit(sheets); err != nil {
 			return nil, fmt.Errorf("write map: %w", err)
 		}
 	}
-	return textResult(string(out)), nil
+	return res, nil
 }
 
 // FindAndReplace updates topic titles. If sheet_id is omitted, all sheets are updated.
