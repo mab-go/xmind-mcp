@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -428,4 +429,87 @@ func TestCreateNewMapRemovesPlaceholderOnFailure(t *testing.T) {
 		t.Fatalf("placeholder left behind after failure: stat err = %v", err)
 	}
 	assertNoTempFiles(t, dir)
+}
+
+// skipUnlessUnixModes skips tests that assert Unix permission bits; Windows tracks only a
+// read-only flag.
+func skipUnlessUnixModes(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits are not meaningful on Windows")
+	}
+}
+
+// assertPerm fails unless path's permission bits are want.
+func assertPerm(t *testing.T, path string, want fs.FileMode) {
+	t.Helper()
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %v, want %v", filepath.Base(path), got, want)
+	}
+}
+
+func TestWritesPreserveFileMode(t *testing.T) {
+	skipUnlessUnixModes(t)
+	// 0640 differs from both os.CreateTemp's 0600 and a typical umask default.
+	const want fs.FileMode = 0o640
+
+	t.Run("Commit", func(t *testing.T) {
+		dst := copyKitchenSink(t)
+		if err := os.Chmod(dst, want); err != nil {
+			t.Fatal(err)
+		}
+		sheets, mw, err := OpenMapForUpdate(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = mw.Close() }()
+		if err := mw.Commit(sheets); err != nil {
+			t.Fatal(err)
+		}
+		assertPerm(t, dst, want)
+	})
+
+	t.Run("WriteMap", func(t *testing.T) {
+		dst := copyKitchenSink(t)
+		if err := os.Chmod(dst, want); err != nil {
+			t.Fatal(err)
+		}
+		sheets, err := ReadMap(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteMap(dst, sheets); err != nil {
+			t.Fatal(err)
+		}
+		assertPerm(t, dst, want)
+	})
+}
+
+func TestCreateNewMapUsesUmaskDefaultMode(t *testing.T) {
+	skipUnlessUnixModes(t)
+	dir := t.TempDir()
+
+	// A file created with 0666 shows what the current umask allows, as os.Create would.
+	ref := filepath.Join(dir, "ref")
+	f, err := os.OpenFile(ref, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(dir, "new.xmind")
+	if err := CreateNewMap(path, []Sheet{{ID: uuid.New().String(), Title: "S"}}); err != nil {
+		t.Fatal(err)
+	}
+	assertPerm(t, path, st.Mode().Perm())
 }
