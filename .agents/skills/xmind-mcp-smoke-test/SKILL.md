@@ -1,6 +1,6 @@
 ---
 name: xmind-mcp-smoke-test
-description: Release pre-validation smoke test that exercises the entire xmind-mcp MCP tool surface (all 27 tools plus error paths) against a throwaway scratch .xmind file, verifying every write by reading it back through the tools. Use before tagging a release, when validating an xmind-mcp build/deployment, or when the user says "smoke test xmind-mcp", "validate the MCP surface", or "run the release smoke test".
+description: Release pre-validation smoke test that exercises the entire xmind-mcp MCP tool surface (all 27 tools plus error paths) against a throwaway scratch .xmind file, verifying every write by reading it back through the tools. Use when invoked via /xmind-mcp-smoke-test, before tagging a release, when validating an xmind-mcp build/deployment, or when the user says "smoke test xmind-mcp", "validate the MCP surface", or "run the release smoke test".
 ---
 
 # xmind-mcp Smoke Test

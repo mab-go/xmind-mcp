@@ -1,17 +1,11 @@
 ---
 name: review-plan
-description: Review implementation plans for accuracy, correctness, and clarity, including any associated task items. Use when reviewing a plan before implementation or when the user asks for plan review.
+description: Reviews implementation plans, including any associated task items, for accuracy, correctness, clarity, and completeness. Use when invoked via /review-plan, when the user asks for a plan review, before implementing a plan or handing it to another agent, or as a self-check after producing or updating a plan.
 ---
 
 # Plan Review
 
-Read the project's agent instructions (e.g. AGENTS.md) before applying this skill to ensure conventions are followed.
-
-## When to apply
-
-- User asks to review a plan before implementation
-- User invokes `/review-plan`
-- After producing or updating a plan and wanting a self-check
+Read the project's agent instructions (e.g. AGENTS.md), plus any nested AGENTS.md in directories the plan touches, before applying this skill.
 
 ## Review directive
 
@@ -24,7 +18,7 @@ For each category, here is **how** to verify -- not just what to check.
 ### Accuracy
 
 - **File paths:** Run `ls` or `find` to confirm referenced files exist.
-- **Function/type names:** Grep the codebase to confirm they exist and have the expected signature.
+- **Names:** Confirm every function, type, config key, and build or script target the plan names exists and has the expected signature or definition. Use LSP (gopls) for Go symbols and grep for everything else.
 - **API behavior claims:** Read the relevant source to verify.
 - **Dependency claims:** Check the dependency manifest (e.g. `go.mod`, `package.json`).
 
@@ -32,18 +26,37 @@ For each category, here is **how** to verify -- not just what to check.
 
 - **Execution simulation:** For each step, mentally simulate: does the preceding step produce what this step needs as input?
 - **Contradictions:** Does step N undo or conflict with step M?
-- **Missing steps:** Would the plan leave the project in a broken state if stopped after any given step? (e.g. a tool defined but not registered, a struct field added but not in the codec allowlist)
+- **Broken intermediate states:** Would the plan leave the project broken if stopped after any given step? Common cases:
+  - Something defined but never registered or wired in where the project discovers it
+  - A new entry of a kind the project lists in several places (registries, docs, config) that misses one of them
+  - A check, test, or tool that hard-codes a list the change extends, so it silently skips the new entry
+  - A new dependency direction that the project's architecture rules or linters forbid
+  - New permissions or credentials that lack access to something they need indirectly
+  - Generated artifacts not regenerated after their source changes
+  - In this project, also check for:
+    - A new tool not registered in `internal/server/server.go`, or missing from `expectedAnnotations` in `internal/server/tools_test.go`
+    - A new JSON key on a tree type missing from its allowlist in `internal/xmind/json_codec.go`, so it is kept as opaque data instead of populating the typed field
+    - A new idempotent tool missing from `idempotentToolCases` in `internal/server/handler/mutate_test.go`; the idempotency tests skip it without failing
+    - A new or renamed tool missing from the Tools section of `README.md` or from the `xmind-mcp-smoke-test` skill, which also states the tool count
+    - An import between `internal/xmind` and `internal/server/handler` (see Layer Dependencies in AGENTS.md)
+- **Invariants:** If the project's agent instructions declare invariants (things that must never happen), any step that would break one is a blocker. These are always blockers:
+  - Editing a migration that has already been applied
+  - Weakening a test, constraint, or lint rule to make something pass
+  - Removing, stubbing, or disabling existing behavior to clear an error without saying so explicitly
+  - In this project, breaking a rule AGENTS.md declares in Fields to never modify, Topic IDs, the temp-then-swap write (Read/Write Lifecycle), or the no-write rule for idempotent tools (Argument extraction)
 
 ### Clarity
 
 - **Different-agent test:** Could someone without the surrounding conversation context follow each step unambiguously?
 - **Vague language:** Flag uses of "appropriate," "relevant," "as needed," "properly" that lack specifics about what they mean concretely.
+- **Actionability:** Each step should be concrete enough to implement. Reserve "consider X" for places where real alternatives exist, and say what decides between them.
 
 ### Completeness
 
 - Does the plan include a verification step (build/test/lint)?
 - Does it include documentation or config updates if structural changes are made?
 - Does it follow established patterns visible in the codebase?
+- **Unknowns and assumptions:** Does the plan rely on anything it has not confirmed? Flag assumptions that need checking, and missing context that prevents a confident review.
 
 ## Severity levels
 
@@ -66,15 +79,15 @@ If the plan has associated task items (YAML frontmatter todos, a checklist, or s
 
 ### Task item examples
 
-**Incomplete:** "Update the handler" -- which handler? What change? Better: "Add validation for the `title` argument in `CreateTopicHandler`"
+**Incomplete:** "Update the parser" -- which parser? What change? Better: "Reject empty `name` values in `parseConfig`"
 
-**Composite:** "Add tool and write tests" -- split into "Define tool in tools.go" and "Add handler tests"
+**Composite:** "Add the CSV exporter and write its tests" -- split into "Implement `CsvExporter`" and "Add tests for `CsvExporter`"
 
 **Ambiguous:** "Clean up the code" -- no completion criterion. Better: "Extract duplicate path-validation into a shared helper"
 
 **Trivial:** "Import the uuid package" -- this happens automatically when writing the code that uses it. Remove.
 
-**Misordered:** "Write handler tests" before "Implement handler" -- swap.
+**Misordered:** "Add tests for `CsvExporter`" before "Implement `CsvExporter`" -- swap.
 
 ## Output
 
