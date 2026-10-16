@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -12,8 +11,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// subtreeNode is the JSON shape for xmind_get_subtree (not a raw xmind.Topic).
-type subtreeNode struct {
+// SubtreeNode is the JSON shape for xmind_get_subtree (not a raw xmind.Topic).
+type SubtreeNode struct {
 	ID             string         `json:"id"`
 	Title          string         `json:"title,omitempty"`
 	ChildType      string         `json:"childType,omitempty"`
@@ -22,7 +21,7 @@ type subtreeNode struct {
 	Markers        []xmind.Marker `json:"markers,omitempty"`
 	Notes          string         `json:"notes,omitempty"`
 	Href           string         `json:"href,omitempty"`
-	Children       []*subtreeNode `json:"children,omitempty"`
+	Children       []*SubtreeNode `json:"children,omitempty"`
 	ChildrenCount  int            `json:"childrenCount,omitempty"`
 }
 
@@ -61,11 +60,11 @@ func plainNoteContent(t *xmind.Topic) string {
 	return t.Notes.Plain.Content
 }
 
-func topicToSubtree(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpts) *subtreeNode {
+func topicToSubtree(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpts) *SubtreeNode {
 	if t == nil {
 		return nil
 	}
-	n := &subtreeNode{
+	n := &SubtreeNode{
 		ID:             t.ID,
 		Title:          t.Title,
 		StructureClass: t.StructureClass,
@@ -92,11 +91,11 @@ func topicToSubtree(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpt
 	return n
 }
 
-func childSubtrees(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpts) []*subtreeNode {
+func childSubtrees(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpts) []*SubtreeNode {
 	if t == nil || t.Children == nil {
 		return nil
 	}
-	var out []*subtreeNode
+	var out []*SubtreeNode
 	for i := range t.Children.Attached {
 		out = append(out, topicToSubtree(&t.Children.Attached[i], curDepth+1, maxDepth, opts))
 	}
@@ -240,14 +239,11 @@ func (h *XMindHandler) GetSubtree(ctx context.Context, req mcp.CallToolRequest) 
 
 	node := topicToSubtree(root, 0, maxDepth, opts)
 	node.ChildType = childTypeInSheet(sh, root.ID)
-	out, err := json.Marshal(node)
-	if err != nil {
-		return nil, fmt.Errorf("marshal get_subtree response: %w", err)
-	}
-	return textResult(string(out)), nil
+	return jsonResult(node)
 }
 
-type searchTopicsResponse struct {
+// SearchTopicsResponse is the JSON shape returned by xmind_search_topics.
+type SearchTopicsResponse struct {
 	Query      string            `json:"query"`
 	MatchCount int               `json:"matchCount"`
 	Matches    []searchTopicItem `json:"matches"`
@@ -345,19 +341,16 @@ func (h *XMindHandler) SearchTopics(ctx context.Context, req mcp.CallToolRequest
 		matches = append(matches, collectSearchTopicMatches(sh, qLower, allSheets)...)
 	}
 
-	resp := searchTopicsResponse{
+	resp := SearchTopicsResponse{
 		Query:      query,
 		MatchCount: len(matches),
 		Matches:    matches,
 	}
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("marshal search_topics response: %w", err)
-	}
-	return textResult(string(out)), nil
+	return jsonResult(resp)
 }
 
-type findTopicResponse struct {
+// FindTopicResponse is the JSON shape returned by xmind_find_topic.
+type FindTopicResponse struct {
 	ID             string   `json:"id"`
 	Title          string   `json:"title"`
 	ChildType      string   `json:"childType,omitempty"`
@@ -444,8 +437,8 @@ func findFirstTopicByExactTitle(searchRoot *xmind.Topic, wantTitle string) (foun
 	return found, foundParent
 }
 
-func findTopicResponseFromMatch(sh *xmind.Sheet, found, foundParent *xmind.Topic) findTopicResponse {
-	resp := findTopicResponse{
+func findTopicResponseFromMatch(sh *xmind.Sheet, found, foundParent *xmind.Topic) FindTopicResponse {
+	resp := FindTopicResponse{
 		ID:           found.ID,
 		Title:        found.Title,
 		ChildType:    childTypeInSheet(sh, found.ID),
@@ -459,8 +452,8 @@ func findTopicResponseFromMatch(sh *xmind.Sheet, found, foundParent *xmind.Topic
 	return resp
 }
 
-func findTopicWorkflow(absPath, sheetID string, args map[string]any, wantTitle string) (findTopicResponse, *mcp.CallToolResult, error) {
-	var zero findTopicResponse
+func findTopicWorkflow(absPath, sheetID string, args map[string]any, wantTitle string) (FindTopicResponse, *mcp.CallToolResult, error) {
+	var zero FindTopicResponse
 	sh, te, err := readMapAndSheet(absPath, sheetID)
 	if err != nil {
 		return zero, nil, err
@@ -507,15 +500,11 @@ func (h *XMindHandler) FindTopic(ctx context.Context, req mcp.CallToolRequest) (
 		return te, nil
 	}
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("marshal find_topic response: %w", err)
-	}
-	return textResult(string(out)), nil
+	return jsonResult(resp)
 }
 
-// topicPropertiesResponse is the JSON shape for xmind_get_topic_properties.
-type topicPropertiesResponse struct {
+// TopicPropertiesResponse is the JSON shape for xmind_get_topic_properties.
+type TopicPropertiesResponse struct {
 	ID             string                        `json:"id"`
 	Title          string                        `json:"title,omitempty"`
 	StructureClass string                        `json:"structureClass,omitempty"`
@@ -556,8 +545,8 @@ type topicPropertiesChildCounts struct {
 	Summary  int `json:"summary,omitempty"`
 }
 
-func topicPropertiesBase(topic *xmind.Topic) topicPropertiesResponse {
-	out := topicPropertiesResponse{
+func topicPropertiesBase(topic *xmind.Topic) TopicPropertiesResponse {
+	out := TopicPropertiesResponse{
 		ID:             topic.ID,
 		Title:          topic.Title,
 		StructureClass: topic.StructureClass,
@@ -571,7 +560,7 @@ func topicPropertiesBase(topic *xmind.Topic) topicPropertiesResponse {
 	return out
 }
 
-func applyTopicPropertiesMedia(out *topicPropertiesResponse, topic *xmind.Topic) {
+func applyTopicPropertiesMedia(out *TopicPropertiesResponse, topic *xmind.Topic) {
 	if plain := plainNoteContent(topic); plain != "" {
 		out.Notes = plain
 	}
@@ -586,7 +575,7 @@ func applyTopicPropertiesMedia(out *topicPropertiesResponse, topic *xmind.Topic)
 	}
 }
 
-func applyTopicPropertiesBoundaries(out *topicPropertiesResponse, topic *xmind.Topic) {
+func applyTopicPropertiesBoundaries(out *TopicPropertiesResponse, topic *xmind.Topic) {
 	n := len(topic.Boundaries)
 	if n == 0 {
 		return
@@ -603,13 +592,13 @@ func applyTopicPropertiesBoundaries(out *topicPropertiesResponse, topic *xmind.T
 	}
 }
 
-func applyTopicPropertiesSummaryCount(out *topicPropertiesResponse, topic *xmind.Topic) {
+func applyTopicPropertiesSummaryCount(out *TopicPropertiesResponse, topic *xmind.Topic) {
 	if sc := len(topic.Summaries); sc > 0 {
 		out.SummaryCount = sc
 	}
 }
 
-func appendTopicRelationshipsForTopic(out *topicPropertiesResponse, sh *xmind.Sheet, topicID string) {
+func appendTopicRelationshipsForTopic(out *TopicPropertiesResponse, sh *xmind.Sheet, topicID string) {
 	if sh == nil || len(sh.Relationships) == 0 {
 		return
 	}
@@ -653,9 +642,9 @@ func topicChildCountsForResponse(topic *xmind.Topic) *topicPropertiesChildCounts
 	return cc
 }
 
-func topicPropertiesResponseFrom(sh *xmind.Sheet, topic *xmind.Topic) topicPropertiesResponse {
+func topicPropertiesResponseFrom(sh *xmind.Sheet, topic *xmind.Topic) TopicPropertiesResponse {
 	if topic == nil {
-		return topicPropertiesResponse{}
+		return TopicPropertiesResponse{}
 	}
 	out := topicPropertiesBase(topic)
 	applyTopicPropertiesMedia(&out, topic)
@@ -701,10 +690,5 @@ func (h *XMindHandler) GetTopicProperties(ctx context.Context, req mcp.CallToolR
 		return mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", topicID)), nil
 	}
 
-	resp := topicPropertiesResponseFrom(sh, t)
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("marshal get_topic_properties response: %w", err)
-	}
-	return textResult(string(out)), nil
+	return jsonResult(topicPropertiesResponseFrom(sh, t))
 }

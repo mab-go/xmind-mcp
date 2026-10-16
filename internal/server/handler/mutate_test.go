@@ -19,48 +19,48 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-func parseAddTopicResult(t *testing.T, res *mcp.CallToolResult) addTopicResponse {
+func parseAddTopicResult(t *testing.T, res *mcp.CallToolResult) AddTopicResponse {
 	t.Helper()
 	if res.IsError {
 		t.Fatalf("expected success, got tool error: %s", textContent(t, res))
 	}
-	var out addTopicResponse
+	var out AddTopicResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("parse add topic JSON: %v", err)
 	}
 	return out
 }
 
-func parseAddTopicsBulkResult(t *testing.T, res *mcp.CallToolResult) addTopicsBulkResponse {
+func parseAddTopicsBulkResult(t *testing.T, res *mcp.CallToolResult) AddTopicsBulkResponse {
 	t.Helper()
 	if res.IsError {
 		t.Fatalf("expected success, got tool error: %s", textContent(t, res))
 	}
-	var out addTopicsBulkResponse
+	var out AddTopicsBulkResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("parse add topics bulk JSON: %v", err)
 	}
 	return out
 }
 
-func parseMoveTopicResult(t *testing.T, res *mcp.CallToolResult) moveTopicResponse {
+func parseMoveTopicResult(t *testing.T, res *mcp.CallToolResult) MoveTopicResponse {
 	t.Helper()
 	if res.IsError {
 		t.Fatalf("expected success, got tool error: %s", textContent(t, res))
 	}
-	var out moveTopicResponse
+	var out MoveTopicResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("parse move topic JSON: %v", err)
 	}
 	return out
 }
 
-func parseDuplicateTopicResult(t *testing.T, res *mcp.CallToolResult) duplicateTopicResponse {
+func parseDuplicateTopicResult(t *testing.T, res *mcp.CallToolResult) DuplicateTopicResponse {
 	t.Helper()
 	if res.IsError {
 		t.Fatalf("expected success, got tool error: %s", textContent(t, res))
 	}
-	var out duplicateTopicResponse
+	var out DuplicateTopicResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("parse duplicate topic JSON: %v", err)
 	}
@@ -93,7 +93,7 @@ func readZipContentJSON(t *testing.T, path string) []byte {
 	return nil
 }
 
-func assertNestedBulkL1L2L3(t *testing.T, rt *xmind.Topic, bulk addTopicsBulkResponse, rootID string) {
+func assertNestedBulkL1L2L3(t *testing.T, rt *xmind.Topic, bulk AddTopicsBulkResponse, rootID string) {
 	t.Helper()
 	if bulk.ParentID != rootID {
 		t.Fatalf("unexpected parentId: got %q want %q", bulk.ParentID, rootID)
@@ -194,7 +194,7 @@ func assertBulkMetaChild(t *testing.T, child *xmind.Topic) {
 	}
 }
 
-func assertMoveResponseBasic(t *testing.T, mv moveTopicResponse, topicID, parentID string, pos int, sib int) {
+func assertMoveResponseBasic(t *testing.T, mv MoveTopicResponse, topicID, parentID string, pos int, sib int) {
 	t.Helper()
 	if mv.TopicID != topicID || mv.ParentID != parentID || mv.Position != pos || mv.SiblingCount != sib {
 		t.Fatalf("unexpected move response: %+v", mv)

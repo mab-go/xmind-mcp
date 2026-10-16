@@ -32,7 +32,7 @@ func TestIntegration_FindThenMutate(t *testing.T) {
 	if res.IsError {
 		t.Fatal(textContent(t, res))
 	}
-	var st searchTopicsResponse
+	var st SearchTopicsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &st); err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestEdgeCase_FloatingOnlySheet(t *testing.T) {
 	if subRes.IsError {
 		t.Fatal(textContent(t, subRes))
 	}
-	var node subtreeNode
+	var node SubtreeNode
 	if err := json.Unmarshal([]byte(textContent(t, subRes)), &node); err != nil {
 		t.Fatal(err)
 	}

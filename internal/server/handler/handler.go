@@ -27,13 +27,16 @@ func textResult(text string) *mcp.CallToolResult {
 	}
 }
 
-// jsonResult marshals v to JSON and returns it as the tool result text body.
+// jsonResult marshals v to JSON and returns it as the tool result text body, with v as the
+// result's structuredContent. The tool must declare v's type with OutputSchema.
 func jsonResult(v any) (*mcp.CallToolResult, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return nil, fmt.Errorf("marshal response: %w", err)
 	}
-	return textResult(string(data)), nil
+	res := textResult(string(data))
+	res.StructuredContent = v
+	return res, nil
 }
 
 // countTopics returns 1 (self) plus all descendants in attached, detached, and summary.

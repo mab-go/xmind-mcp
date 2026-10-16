@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,8 +13,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// openMapResponse is the JSON shape returned by xmind_open_map.
-type openMapResponse struct {
+// OpenMapResponse is the JSON shape returned by xmind_open_map.
+type OpenMapResponse struct {
 	Path       string         `json:"path"`
 	SheetCount int            `json:"sheetCount"`
 	Sheets     []openMapSheet `json:"sheets"`
@@ -46,7 +45,7 @@ func (h *XMindHandler) OpenMap(ctx context.Context, req mcp.CallToolRequest) (*m
 		return toolErr2, nil
 	}
 
-	resp := openMapResponse{
+	resp := OpenMapResponse{
 		Path:       absPath,
 		SheetCount: len(sheets),
 		Sheets:     make([]openMapSheet, 0, len(sheets)),
@@ -64,12 +63,7 @@ func (h *XMindHandler) OpenMap(ctx context.Context, req mcp.CallToolRequest) (*m
 		})
 	}
 
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("marshal open_map response: %w", err)
-	}
-
-	return textResult(string(out)), nil
+	return jsonResult(resp)
 }
 
 func topLevelTopicTitles(root *xmind.Topic) []string {
@@ -83,7 +77,8 @@ func topLevelTopicTitles(root *xmind.Topic) []string {
 	return out
 }
 
-type listSheetsResponse struct {
+// ListSheetsResponse is the JSON shape returned by xmind_list_sheets.
+type ListSheetsResponse struct {
 	Path   string           `json:"path"`
 	Sheets []listSheetsItem `json:"sheets"`
 }
@@ -110,22 +105,18 @@ func (h *XMindHandler) ListSheets(ctx context.Context, req mcp.CallToolRequest) 
 		return toolErr2, nil
 	}
 
-	resp := listSheetsResponse{
+	resp := ListSheetsResponse{
 		Path:   absPath,
 		Sheets: make([]listSheetsItem, 0, len(sheets)),
 	}
 	for i := range sheets {
 		resp.Sheets = append(resp.Sheets, listSheetsItem{ID: sheets[i].ID, Title: sheets[i].Title})
 	}
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("marshal list_sheets response: %w", err)
-	}
-	return textResult(string(out)), nil
+	return jsonResult(resp)
 }
 
-// listRelationshipsResponse is the JSON shape returned by xmind_list_relationships.
-type listRelationshipsResponse struct {
+// ListRelationshipsResponse is the JSON shape returned by xmind_list_relationships.
+type ListRelationshipsResponse struct {
 	SheetID           string                  `json:"sheetId"`
 	RelationshipCount int                     `json:"relationshipCount"`
 	Relationships     []listRelationshipsItem `json:"relationships"`
@@ -196,16 +187,12 @@ func (h *XMindHandler) ListRelationships(ctx context.Context, req mcp.CallToolRe
 
 	rels := listRelationshipsItems(sh)
 
-	resp := listRelationshipsResponse{
+	resp := ListRelationshipsResponse{
 		SheetID:           sh.ID,
 		RelationshipCount: len(rels),
 		Relationships:     rels,
 	}
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("marshal list_relationships response: %w", err)
-	}
-	return textResult(string(out)), nil
+	return jsonResult(resp)
 }
 
 // bumpAllSheetsRevisionID assigns a new UUID v4 revisionId to every sheet in the slice (in place).

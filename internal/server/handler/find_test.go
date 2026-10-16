@@ -44,7 +44,7 @@ func kitchenSinkSheetIDByTitle(t *testing.T, title string) string {
 	return ""
 }
 
-func assertSubtreeNoNotesField(t *testing.T, n *subtreeNode) {
+func assertSubtreeNoNotesField(t *testing.T, n *SubtreeNode) {
 	t.Helper()
 	if n.Notes != "" {
 		t.Fatalf("expected no notes on node id %q, got %q", n.ID, n.Notes)
@@ -54,7 +54,7 @@ func assertSubtreeNoNotesField(t *testing.T, n *subtreeNode) {
 	}
 }
 
-func assertSubtreeNoHrefField(t *testing.T, n *subtreeNode) {
+func assertSubtreeNoHrefField(t *testing.T, n *SubtreeNode) {
 	t.Helper()
 	if n.Href != "" {
 		t.Fatalf("expected no href on node id %q, got %q", n.ID, n.Href)
@@ -64,20 +64,20 @@ func assertSubtreeNoHrefField(t *testing.T, n *subtreeNode) {
 	}
 }
 
-func mustGetSubtreeJSON(t *testing.T, h *XMindHandler, args map[string]any) subtreeNode {
+func mustGetSubtreeJSON(t *testing.T, h *XMindHandler, args map[string]any) SubtreeNode {
 	t.Helper()
 	res := callTool(t, h.GetSubtree, args)
 	if res.IsError {
 		t.Fatalf("GetSubtree: %s", textContent(t, res))
 	}
-	var node subtreeNode
+	var node SubtreeNode
 	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	return node
 }
 
-func mustGetTopicPropertiesJSON(t *testing.T, h *XMindHandler, path, sheetID, topicID string) topicPropertiesResponse {
+func mustGetTopicPropertiesJSON(t *testing.T, h *XMindHandler, path, sheetID, topicID string) TopicPropertiesResponse {
 	t.Helper()
 	res := callTool(t, h.GetTopicProperties, map[string]any{
 		"path": path, "sheet_id": sheetID, "topic_id": topicID,
@@ -85,7 +85,7 @@ func mustGetTopicPropertiesJSON(t *testing.T, h *XMindHandler, path, sheetID, to
 	if res.IsError {
 		t.Fatalf("GetTopicProperties: %s", textContent(t, res))
 	}
-	var out topicPropertiesResponse
+	var out TopicPropertiesResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -155,21 +155,21 @@ func scanKitchenSinkBoundarySummaryPosition(t *testing.T, sheets []xmind.Sheet) 
 	return refs
 }
 
-func assertBoundaryTopicPropertiesNonEmpty(t *testing.T, out topicPropertiesResponse) {
+func assertBoundaryTopicPropertiesNonEmpty(t *testing.T, out TopicPropertiesResponse) {
 	t.Helper()
 	if out.BoundaryCount != len(out.Boundaries) || out.BoundaryCount < 1 {
 		t.Fatalf("boundaryCount/boundaries: %+v", out)
 	}
 }
 
-func assertSummaryTopicPropertiesNonEmpty(t *testing.T, out topicPropertiesResponse) {
+func assertSummaryTopicPropertiesNonEmpty(t *testing.T, out TopicPropertiesResponse) {
 	t.Helper()
 	if out.SummaryCount < 1 {
 		t.Fatalf("summaryCount: got %+v", out)
 	}
 }
 
-func assertPositionTopicPropertiesPresent(t *testing.T, out topicPropertiesResponse) {
+func assertPositionTopicPropertiesPresent(t *testing.T, out TopicPropertiesResponse) {
 	t.Helper()
 	if out.Position == nil {
 		t.Fatal("expected position on floating topic")
@@ -198,7 +198,7 @@ func countRelationshipsInvolvingEnd(sh *xmind.Sheet, endID string) int {
 	return n
 }
 
-func assertTopicPropertiesRelationshipsMatchSheet(t *testing.T, sh *xmind.Sheet, end1 string, out topicPropertiesResponse) {
+func assertTopicPropertiesRelationshipsMatchSheet(t *testing.T, sh *xmind.Sheet, end1 string, out TopicPropertiesResponse) {
 	t.Helper()
 	byID := make(map[string]topicPropertiesRelationship, len(out.Relationships))
 	for _, r := range out.Relationships {
@@ -241,7 +241,7 @@ func TestGetSubtreeKitchenSinkRoot(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("GetSubtree: %s", textContent(t, res))
 	}
-	var node subtreeNode
+	var node SubtreeNode
 	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestSearchTopicsKitchenSink(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("SearchTopics: %s", textContent(t, res))
 	}
-	var out searchTopicsResponse
+	var out SearchTopicsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestFindTopicKitchenSink(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("FindTopic: %s", textContent(t, res))
 	}
-	var out findTopicResponse
+	var out FindTopicResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestFindTopicAncestryPathScopedStillAbsolute(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("FindTopic: %s", textContent(t, res))
 	}
-	var out findTopicResponse
+	var out FindTopicResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestSearchTopicsAncestryPath(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("SearchTopics: %s", textContent(t, res))
 	}
-	var out searchTopicsResponse
+	var out SearchTopicsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestGetSubtreeWithTopicID(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("GetSubtree: %s", textContent(t, res))
 	}
-	var node subtreeNode
+	var node SubtreeNode
 	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestGetSubtreeDepthLimit(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("GetSubtree: %s", textContent(t, res))
 	}
-	var node subtreeNode
+	var node SubtreeNode
 	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestSearchTopicsNoMatches(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("SearchTopics: %s", textContent(t, res))
 	}
-	var out searchTopicsResponse
+	var out SearchTopicsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestSearchTopicsResponseShape(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("SearchTopics: %s", textContent(t, res))
 	}
-	var out searchTopicsResponse
+	var out SearchTopicsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestSearchTopicsAllSheets(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("SearchTopics (all sheets): %s", textContent(t, res))
 	}
-	var out searchTopicsResponse
+	var out SearchTopicsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -516,7 +516,7 @@ func TestSearchTopicsSingleSheetStillWorks(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("SearchTopics (single sheet): %s", textContent(t, res))
 	}
-	var out searchTopicsResponse
+	var out SearchTopicsResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -577,7 +577,7 @@ func TestFindTopicIncludesDetachedSiblings(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("FindTopic: %s", textContent(t, res))
 	}
-	var out findTopicResponse
+	var out FindTopicResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -713,7 +713,7 @@ func TestFindTopicScopedDescendant(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("FindTopic: %s", textContent(t, res))
 	}
-	var out findTopicResponse
+	var out FindTopicResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -737,7 +737,7 @@ func TestFindTopicParentIDSelfMatch(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("FindTopic: %s", textContent(t, res))
 	}
-	var out findTopicResponse
+	var out FindTopicResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -766,7 +766,7 @@ func TestFindTopicSheetRootAncestryNil(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("FindTopic: %s", textContent(t, res))
 	}
-	var out findTopicResponse
+	var out FindTopicResponse
 	if err := json.Unmarshal([]byte(textContent(t, res)), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -786,7 +786,7 @@ func TestGetSubtreeDepthZero(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("GetSubtree: %s", textContent(t, res))
 	}
-	var node subtreeNode
+	var node SubtreeNode
 	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -875,7 +875,7 @@ func TestGetSubtreeIncludeNotesAndLinksBothTrue(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("GetSubtree: %s", textContent(t, res))
 	}
-	var node subtreeNode
+	var node SubtreeNode
 	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -897,7 +897,7 @@ func TestGetSubtreeDepthWithIncludeFlags(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("GetSubtree: %s", textContent(t, res))
 	}
-	var node subtreeNode
+	var node SubtreeNode
 	if err := json.Unmarshal([]byte(textContent(t, res)), &node); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
