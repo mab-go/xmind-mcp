@@ -172,6 +172,10 @@ pass the `--log-level` flag or set the `XMIND_MCP_LOG_LEVEL` environment
 variable (the flag wins if both are set). Accepted values are `debug`, `info`,
 `warn`, and `error`; an unrecognized value exits with an error at startup.
 
+If a tool handler panics, the server keeps running: it returns an internal
+error to the client and logs an `error`-level `tool.panic` line with a stack
+trace, whatever the log level.
+
 `debug` adds per-connection lifecycle detail (the MCP `initialize` handshake).
 To enable it from a client config, set it via `env`:
 
