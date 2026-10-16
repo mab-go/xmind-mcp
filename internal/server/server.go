@@ -24,7 +24,6 @@ func newXMindServer(ctx context.Context, h *handler.XMindHandler) *mcpserver.MCP
 		"xmind-mcp",
 		version.Version,
 		mcpserver.WithToolCapabilities(true),
-		mcpserver.WithLogging(),
 		mcpserver.WithHooks(hooks),
 	)
 
