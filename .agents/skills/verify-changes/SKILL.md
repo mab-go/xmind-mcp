@@ -37,4 +37,3 @@ Read the project's agent instructions (e.g. AGENTS.md) before applying this skil
 ## Related skills
 
 - This is a natural prerequisite for `/commit-message`.
-- Include as the final item when using `/make-todos` to decompose work.
