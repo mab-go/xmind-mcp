@@ -18,7 +18,8 @@ const (
 	effectDestructiveIdempotent                       // as above; a repeat call has no further effect
 )
 
-// withAnnotations sets the tool's display title and all four MCP behavior hints.
+// withAnnotations sets the tool's display title and all four MCP behavior hints. The title
+// goes in both the top-level title and annotations.title, for clients that read only one.
 // Every hint is set explicitly because mcp.NewTool otherwise defaults each tool to
 // destructive and open-world. Every xmind tool is local-only, so openWorldHint is always false.
 // An unknown effect panics; tools are package-level vars, so that surfaces at startup.
@@ -38,13 +39,18 @@ func withAnnotations(title string, effect toolEffect) mcp.ToolOption {
 	default:
 		panic(fmt.Sprintf("withAnnotations: unknown toolEffect %d for %q", effect, title))
 	}
-	return mcp.WithToolAnnotation(mcp.ToolAnnotation{
+	setTitle := mcp.WithToolTitle(title)
+	setAnnotations := mcp.WithToolAnnotation(mcp.ToolAnnotation{
 		Title:           title,
 		ReadOnlyHint:    new(readOnly),
 		DestructiveHint: new(destructive),
 		IdempotentHint:  new(idempotent),
 		OpenWorldHint:   new(false),
 	})
+	return func(t *mcp.Tool) {
+		setTitle(t)
+		setAnnotations(t)
+	}
 }
 
 var toolOpenMap = mcp.NewTool(
