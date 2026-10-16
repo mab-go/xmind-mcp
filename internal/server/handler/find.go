@@ -16,6 +16,7 @@ import (
 type subtreeNode struct {
 	ID             string         `json:"id"`
 	Title          string         `json:"title,omitempty"`
+	ChildType      string         `json:"childType,omitempty"`
 	StructureClass string         `json:"structureClass,omitempty"`
 	Labels         []string       `json:"labels,omitempty"`
 	Markers        []xmind.Marker `json:"markers,omitempty"`
@@ -23,6 +24,21 @@ type subtreeNode struct {
 	Href           string         `json:"href,omitempty"`
 	Children       []*subtreeNode `json:"children,omitempty"`
 	ChildrenCount  int            `json:"childrenCount,omitempty"`
+}
+
+// childTypeOf maps a child-list name ("attached", "detached", "summary") to the childType that
+// tool output reports: empty for attached children and for the sheet root ("").
+func childTypeOf(listType string) string {
+	if listType == "attached" {
+		return ""
+	}
+	return listType
+}
+
+// childTypeInSheet reports the childType of topicID within sh, via findParentOfTopic.
+func childTypeInSheet(sh *xmind.Sheet, topicID string) string {
+	_, _, listType := findParentOfTopic(&sh.RootTopic, topicID)
+	return childTypeOf(listType)
 }
 
 // subtreeOpts controls optional fields when building a subtree.
@@ -85,10 +101,14 @@ func childSubtrees(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpts
 		out = append(out, topicToSubtree(&t.Children.Attached[i], curDepth+1, maxDepth, opts))
 	}
 	for i := range t.Children.Detached {
-		out = append(out, topicToSubtree(&t.Children.Detached[i], curDepth+1, maxDepth, opts))
+		n := topicToSubtree(&t.Children.Detached[i], curDepth+1, maxDepth, opts)
+		n.ChildType = "detached"
+		out = append(out, n)
 	}
 	for i := range t.Children.Summary {
-		out = append(out, topicToSubtree(&t.Children.Summary[i], curDepth+1, maxDepth, opts))
+		n := topicToSubtree(&t.Children.Summary[i], curDepth+1, maxDepth, opts)
+		n.ChildType = "summary"
+		out = append(out, n)
 	}
 	return out
 }
@@ -219,6 +239,7 @@ func (h *XMindHandler) GetSubtree(ctx context.Context, req mcp.CallToolRequest) 
 	}
 
 	node := topicToSubtree(root, 0, maxDepth, opts)
+	node.ChildType = childTypeInSheet(sh, root.ID)
 	out, err := json.Marshal(node)
 	if err != nil {
 		return nil, fmt.Errorf("marshal get_subtree response: %w", err)
@@ -237,6 +258,7 @@ type searchTopicItem struct {
 	SheetTitle   string   `json:"sheetTitle,omitempty"`
 	ID           string   `json:"id"`
 	Title        string   `json:"title"`
+	ChildType    string   `json:"childType,omitempty"`
 	AncestryPath []string `json:"ancestryPath"`
 	ParentTitle  string   `json:"parentTitle"`
 	Depth        int      `json:"depth"`
@@ -272,6 +294,7 @@ func collectSearchTopicMatches(sh *xmind.Sheet, qLower string, includeSheetMetad
 			item := searchTopicItem{
 				ID:           t.ID,
 				Title:        t.Title,
+				ChildType:    childTypeInSheet(sh, t.ID),
 				AncestryPath: ancestryPath(&sh.RootTopic, t.ID),
 				ParentTitle:  pt,
 				Depth:        depth,
@@ -337,6 +360,7 @@ func (h *XMindHandler) SearchTopics(ctx context.Context, req mcp.CallToolRequest
 type findTopicResponse struct {
 	ID             string   `json:"id"`
 	Title          string   `json:"title"`
+	ChildType      string   `json:"childType,omitempty"`
 	AncestryPath   []string `json:"ancestryPath"`
 	ParentTitle    string   `json:"parentTitle"`
 	SiblingTitles  []string `json:"siblingTitles"`
@@ -424,6 +448,7 @@ func findTopicResponseFromMatch(sh *xmind.Sheet, found, foundParent *xmind.Topic
 	resp := findTopicResponse{
 		ID:           found.ID,
 		Title:        found.Title,
+		ChildType:    childTypeInSheet(sh, found.ID),
 		AncestryPath: ancestryPath(&sh.RootTopic, found.ID),
 	}
 	if foundParent != nil {

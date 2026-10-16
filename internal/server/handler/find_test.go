@@ -2,11 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mab-go/xmind-mcp/internal/xmind"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // Stable topic ID from kitchen-sink Sheet 1 (Mind Map): "Alpha" under Subtopic 1.
@@ -1024,5 +1027,126 @@ func TestSetTopicPropertiesPreservesStructureClass(t *testing.T) {
 	}
 	if root.StructureClass != wantStructureClass {
 		t.Fatalf("structureClass not preserved across write: got %q want %q", root.StructureClass, wantStructureClass)
+	}
+}
+
+// requireToolOK fails the test if res is a tool error.
+func requireToolOK(t *testing.T, what string, res *mcp.CallToolResult) {
+	t.Helper()
+	if res.IsError {
+		t.Fatalf("%s: %s", what, textContent(t, res))
+	}
+}
+
+// newChildTypeMap builds a map whose root ("Root Topic") has attached "Alpha Topic" and
+// "Beta Topic", a floating "Floating Topic", and a summary "Summary Topic" over both attached
+// children. Every title contains "Topic". It returns the path, sheet id, and floating topic id.
+func newChildTypeMap(t *testing.T, h *XMindHandler) (path, sheetID, floatingID string) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "childtype.xmind")
+	requireToolOK(t, "CreateMap", callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "Root Topic"}))
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID, rootID := sheets[0].ID, sheets[0].RootTopic.ID
+	for _, title := range []string{"Alpha Topic", "Beta Topic"} {
+		requireToolOK(t, "AddTopic "+title, callTool(t, h.AddTopic, map[string]any{
+			"path": path, "sheet_id": sheetID, "parent_id": rootID, "title": title,
+		}))
+	}
+	requireToolOK(t, "AddFloatingTopic", callTool(t, h.AddFloatingTopic, map[string]any{
+		"path": path, "sheet_id": sheetID, "title": "Floating Topic",
+	}))
+	requireToolOK(t, "AddSummary", callTool(t, h.AddSummary, map[string]any{
+		"path": path, "sheet_id": sheetID, "parent_id": rootID,
+		"from_index": float64(0), "to_index": float64(1), "title": "Summary Topic",
+	}))
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path, sheetID, sheets[0].RootTopic.Children.Detached[0].ID
+}
+
+// assertChildType checks m's childType key: absent when want is "", otherwise equal to want.
+func assertChildType(t *testing.T, label string, m map[string]any, want string) {
+	t.Helper()
+	got, has := m["childType"]
+	switch {
+	case want == "" && has:
+		t.Errorf("%s: childType = %v, want no childType key", label, got)
+	case want != "" && got != want:
+		t.Errorf("%s: childType = %v, want %q", label, got, want)
+	}
+}
+
+func unmarshalObject(t *testing.T, text string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("unmarshal %q: %v", text, err)
+	}
+	return m
+}
+
+var wantChildTypeByTitle = map[string]string{
+	"Root Topic":     "",
+	"Alpha Topic":    "",
+	"Beta Topic":     "",
+	"Floating Topic": "detached",
+	"Summary Topic":  "summary",
+}
+
+func TestGetSubtreeChildType(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, floatingID := newChildTypeMap(t, h)
+
+	root := unmarshalObject(t, textContent(t, callTool(t, h.GetSubtree, map[string]any{"path": path, "sheet_id": sheetID})))
+	assertChildType(t, "sheet root", root, "")
+	children, _ := root["children"].([]any)
+	if len(children) != 4 {
+		t.Fatalf("root children = %d, want 4 (2 attached, 1 floating, 1 summary)", len(children))
+	}
+	for _, c := range children {
+		node, _ := c.(map[string]any)
+		title, _ := node["title"].(string)
+		assertChildType(t, title, node, wantChildTypeByTitle[title])
+	}
+
+	floating := unmarshalObject(t, textContent(t, callTool(t, h.GetSubtree, map[string]any{
+		"path": path, "sheet_id": sheetID, "topic_id": floatingID,
+	})))
+	assertChildType(t, "subtree rooted at the floating topic", floating, "detached")
+}
+
+func TestFindTopicChildType(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, _ := newChildTypeMap(t, h)
+	for _, title := range []string{"Floating Topic", "Summary Topic", "Alpha Topic", "Root Topic"} {
+		res := callTool(t, h.FindTopic, map[string]any{"path": path, "sheet_id": sheetID, "title": title})
+		requireToolOK(t, "FindTopic "+title, res)
+		assertChildType(t, title, unmarshalObject(t, textContent(t, res)), wantChildTypeByTitle[title])
+	}
+}
+
+func TestSearchTopicsChildType(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, _ := newChildTypeMap(t, h)
+	resp := unmarshalObject(t, textContent(t, callTool(t, h.SearchTopics, map[string]any{
+		"path": path, "sheet_id": sheetID, "query": "topic",
+	})))
+	matches, _ := resp["matches"].([]any)
+	if len(matches) != len(wantChildTypeByTitle) {
+		t.Fatalf("matches = %d, want %d", len(matches), len(wantChildTypeByTitle))
+	}
+	for _, m := range matches {
+		match, _ := m.(map[string]any)
+		title, _ := match["title"].(string)
+		want, known := wantChildTypeByTitle[title]
+		if !known {
+			t.Fatalf("unexpected match %q", title)
+		}
+		assertChildType(t, title, match, want)
 	}
 }
