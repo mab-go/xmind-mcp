@@ -2,9 +2,11 @@ package xmind
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -100,6 +102,66 @@ func TestResolveMapPath(t *testing.T) {
 		symlinkOrSkip(t, realFile, link)
 		assertResolvesTo(t, link, wantFile)
 	})
+
+	t.Run("missing directory keys as the cleaned path", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "missing-dir", "new.xmind")
+		assertResolvesTo(t, p+string(filepath.Separator)+".", p)
+	})
+}
+
+// TestResolveMapPathWithoutWorkingDir covers a relative path when the working directory
+// no longer exists, so it cannot be made absolute. Only Linux reliably fails os.Getwd
+// for a deleted working directory.
+func TestResolveMapPathWithoutWorkingDir(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("relies on os.Getwd failing for a deleted working directory")
+	}
+	gone := filepath.Join(t.TempDir(), "gone")
+	if err := os.Mkdir(gone, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(gone)
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Getwd(); err == nil {
+		t.Skip("os.Getwd still succeeds after the working directory was removed")
+	}
+	assertResolvesTo(t, "./m.xmind", "m.xmind")
+}
+
+func TestCloseNilWriter(t *testing.T) {
+	var mw *MapWriter
+	if err := mw.Close(); err != nil {
+		t.Fatalf("Close on a nil writer = %v, want nil", err)
+	}
+}
+
+// TestCommitFailsWhenTargetRemoved checks that a map deleted between open and Commit is
+// reported, not silently recreated, and that the failed Commit leaves no temp file or lock.
+func TestCommitFailsWhenTargetRemoved(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot remove a file that is still open")
+	}
+	dst := copyKitchenSink(t)
+	sheets, mw, err := OpenMapForUpdate(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(dst); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Commit(sheets); err == nil || !strings.Contains(err.Error(), "stat target") {
+		t.Fatalf("Commit after removal = %v, want a stat target error", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dst); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("removed map was recreated: stat err = %v", err)
+	}
+	assertNoTempFiles(t, filepath.Dir(dst))
+	assertLockRefs(t, mw.target, 0, "after Close")
 }
 
 func TestLockReleasedByClose(t *testing.T) {
