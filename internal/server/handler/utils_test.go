@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -637,5 +638,193 @@ func TestFindAndReplaceJSONShape(t *testing.T) {
 	}
 	if _, ok := m["changes"]; !ok {
 		t.Fatal("missing changes")
+	}
+}
+
+// childTitles returns the titles of t's attached children, in order.
+func childTitles(t *xmind.Topic) []string {
+	if t == nil || t.Children == nil {
+		return nil
+	}
+	titles := make([]string, 0, len(t.Children.Attached))
+	for i := range t.Children.Attached {
+		titles = append(titles, t.Children.Attached[i].Title)
+	}
+	return titles
+}
+
+// importNewSheet imports outline into a new sheet of a fresh map, with any extra arguments,
+// and returns the response text and the new sheet.
+func importNewSheet(t *testing.T, outline string, extra map[string]any) (string, *xmind.Sheet) {
+	t.Helper()
+	h := NewXMindHandler()
+	path := filepath.Join(t.TempDir(), "imp.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "Base"})
+	args := map[string]any{"path": path, "outline": outline}
+	for k, v := range extra {
+		args[k] = v
+	}
+	res := callTool(t, h.ImportFromOutline, args)
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sheets) != 2 {
+		t.Fatalf("expected 2 sheets after import, got %d", len(sheets))
+	}
+	return textContent(t, res), &sheets[1]
+}
+
+// TestImportFromOutlineMixedHeadingAndListNewSheet is the smoke-test step 39 regression: list
+// items under a heading used to be dropped because the first line fixed the parse mode.
+func TestImportFromOutlineMixedHeadingAndListNewSheet(t *testing.T) {
+	text, sh := importNewSheet(t, "# Imported\n- Child 1\n- Child 2", nil)
+	if !strings.Contains(text, "imported 3 topics") {
+		t.Errorf("response = %q, want 3 topics", text)
+	}
+	if sh.Title != "Imported" || sh.RootTopic.Title != "Imported" {
+		t.Errorf("sheet/root title = %q / %q, want Imported", sh.Title, sh.RootTopic.Title)
+	}
+	if got, want := childTitles(&sh.RootTopic), []string{"Child 1", "Child 2"}; !slices.Equal(got, want) {
+		t.Errorf("root children = %v, want %v", got, want)
+	}
+}
+
+func TestImportFromOutlineMixedNestedUnderParent(t *testing.T) {
+	h := NewXMindHandler()
+	path := filepath.Join(t.TempDir(), "mixed.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "X"})
+	sheets, _ := xmind.ReadMap(path)
+	sid, rid := sheets[0].ID, sheets[0].RootTopic.ID
+
+	outline := "# R\n## A\n- a1\n  * a1x\ntext under A\n## B\n- b1"
+	res := callTool(t, h.ImportFromOutline, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "outline": outline,
+	})
+	if res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	if text := textContent(t, res); text != "imported 7 topics" {
+		t.Errorf("response = %q, want imported 7 topics", text)
+	}
+	sheets, _ = xmind.ReadMap(path)
+	root := &sheets[0].RootTopic
+	if got := childTitles(root); !slices.Equal(got, []string{"R"}) {
+		t.Fatalf("parent children = %v, want [R]", got)
+	}
+	r := &root.Children.Attached[0]
+	if got := childTitles(r); !slices.Equal(got, []string{"A", "B"}) {
+		t.Fatalf("R children = %v, want [A B]", got)
+	}
+	a, b := &r.Children.Attached[0], &r.Children.Attached[1]
+	if got := childTitles(a); !slices.Equal(got, []string{"a1", "text under A"}) {
+		t.Fatalf("A children = %v, want [a1 text under A]", got)
+	}
+	if got := childTitles(&a.Children.Attached[0]); !slices.Equal(got, []string{"a1x"}) {
+		t.Errorf("a1 children = %v, want [a1x]", got)
+	}
+	if got := childTitles(b); !slices.Equal(got, []string{"b1"}) {
+		t.Errorf("B children = %v, want [b1]", got)
+	}
+}
+
+func TestImportFromOutlineNewSheetMultipleTopLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		extra     map[string]any
+		wantTitle string
+	}{
+		{"default root", nil, "Imported Outline"},
+		{"root_title", map[string]any{"root_title": "Solos"}, "Solos"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text, sh := importNewSheet(t, "- Solo A\n- Solo B", tc.extra)
+			if !strings.Contains(text, "imported 3 topics") {
+				t.Errorf("response = %q, want 3 topics (synthesized root counts)", text)
+			}
+			if sh.Title != tc.wantTitle || sh.RootTopic.Title != tc.wantTitle {
+				t.Errorf("sheet/root title = %q / %q, want %q", sh.Title, sh.RootTopic.Title, tc.wantTitle)
+			}
+			if got, want := childTitles(&sh.RootTopic), []string{"Solo A", "Solo B"}; !slices.Equal(got, want) {
+				t.Errorf("root children = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestImportFromOutlineRootTitleSingleTopLevel(t *testing.T) {
+	text, sh := importNewSheet(t, "# Only\n## Kid", map[string]any{"root_title": "Wrapper"})
+	if !strings.Contains(text, "imported 3 topics") {
+		t.Errorf("response = %q, want 3 topics", text)
+	}
+	if sh.Title != "Wrapper" || sh.RootTopic.Title != "Wrapper" {
+		t.Errorf("sheet/root title = %q / %q, want Wrapper", sh.Title, sh.RootTopic.Title)
+	}
+	if got := childTitles(&sh.RootTopic); !slices.Equal(got, []string{"Only"}) {
+		t.Fatalf("root children = %v, want [Only]", got)
+	}
+	if got := childTitles(&sh.RootTopic.Children.Attached[0]); !slices.Equal(got, []string{"Kid"}) {
+		t.Errorf("Only children = %v, want [Kid]", got)
+	}
+}
+
+func TestImportFromOutlineRootTitleWithSheetIDError(t *testing.T) {
+	h := NewXMindHandler()
+	path := filepath.Join(t.TempDir(), "rt-err.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	res := callTool(t, h.ImportFromOutline, map[string]any{
+		"path": path, "sheet_id": sheets[0].ID, "outline": "- x", "root_title": "Nope",
+	})
+	if !res.IsError {
+		t.Fatal("expected tool error when root_title is set with sheet_id")
+	}
+	if msg := textContent(t, res); !strings.Contains(msg, "root_title only applies") {
+		t.Errorf("error message = %q", msg)
+	}
+}
+
+// TestFlattenImportRoundTripWithNotes checks that the note lines flatten_to_outline writes
+// with include_notes ("> " in Markdown, "[note]" in text) do not become topics on import.
+func TestFlattenImportRoundTripWithNotes(t *testing.T) {
+	for _, format := range []string{"markdown", "text"} {
+		t.Run(format, func(t *testing.T) {
+			h := NewXMindHandler()
+			path := filepath.Join(t.TempDir(), "notes-rt.xmind")
+			callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+			sheets, _ := xmind.ReadMap(path)
+			sid, rid := sheets[0].ID, sheets[0].RootTopic.ID
+			c1 := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
+				"path": path, "sheet_id": sid, "parent_id": rid, "title": "C1",
+			})).ID
+			callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": "C2"})
+			callTool(t, h.SetTopicProperties, map[string]any{"path": path, "sheet_id": sid, "topic_id": rid, "notes": "root note\nline 2"})
+			callTool(t, h.SetTopicProperties, map[string]any{"path": path, "sheet_id": sid, "topic_id": c1, "notes": "child note"})
+
+			withNotes := textContent(t, callTool(t, h.FlattenToOutline, map[string]any{
+				"path": path, "sheet_id": sid, "format": format, "include_notes": true,
+			}))
+			if !strings.Contains(withNotes, "child note") {
+				t.Fatalf("flatten output has no note lines; test is not exercising notes:\n%s", withNotes)
+			}
+			res := callTool(t, h.ImportFromOutline, map[string]any{"path": path, "outline": withNotes})
+			if res.IsError {
+				t.Fatal(textContent(t, res))
+			}
+			sheets, _ = xmind.ReadMap(path)
+			newSID := sheets[len(sheets)-1].ID
+
+			flatten := func(sheetID string) string {
+				return textContent(t, callTool(t, h.FlattenToOutline, map[string]any{
+					"path": path, "sheet_id": sheetID, "format": format,
+				}))
+			}
+			if orig, imported := flatten(sid), flatten(newSID); orig != imported {
+				t.Fatalf("round trip with notes changed the tree:\n--- original\n%s\n--- imported\n%s", orig, imported)
+			}
+		})
 	}
 }

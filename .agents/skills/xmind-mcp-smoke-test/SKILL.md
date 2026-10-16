@@ -32,6 +32,7 @@ Several tools return IDs you must thread into later calls. Note where each comes
 - `xmind_create_map` / `xmind_add_sheet` return the **sheet id in their text result** (`"...with sheet id <ID>"`, `"added sheet id <ID>"`). Parse it out.
 - Root-topic IDs are **not** returned by `create_map` or `open_map`. Get them from `xmind_get_subtree` (the root node's `id`).
 - `xmind_add_topic`, `xmind_add_topics_bulk`, `xmind_duplicate_topic`, `xmind_move_topic` return JSON with the new/affected IDs.
+- `xmind_import_from_outline` into a **new sheet** (no `sheet_id`) returns the new sheet id in its text (`"imported N topics into new sheet id <ID>"`). Parse it out.
 - Relationship IDs come from `xmind_list_relationships`.
 
 Keep a running scratch-pad of `sheetMain`, `rootId`, `alphaId`, etc. as you go.
@@ -64,7 +65,7 @@ Run the phases in order; later phases depend on structure built earlier. For eac
 17. `xmind_set_topic_properties_bulk` → `topic_ids=[alphaId, gammaId]`, `labels=["bulk"]`.
 18. `xmind_get_topic_properties` → `alphaId` **and** `gammaId`. **Assert:** both have label `"bulk"`.
 19. `xmind_set_topic_properties` → `betaId`, `markers=["priority-1","priority-2"]`, `remove_markers=["priority-2"]`. **Assert** via `xmind_get_topic_properties`: markers = `["priority-1"]` only (remove applied after replace).
-20. **Clear semantics:** `xmind_set_topic_properties` → `betaId`, `notes=""`, `link=""`, `labels=[]`, `markers=[]`. **Assert** via `xmind_get_topic_properties`: notes, href, labels, markers all absent.
+20. **Clear semantics:** `xmind_set_topic_properties` → `betaId`, `notes=""`, `link=""`, `labels=[]`, `markers=[]`. The `""` values are **empty JSON strings** (`"notes": ""`), not the two-character text `""`; passing the literal quotes stores them as note and link text. **Assert** via `xmind_get_topic_properties`: notes, href, labels, markers all absent.
 
 ### Phase 4 — Find & search
 21. `xmind_search_topics` → omit `sheet_id`, `query="a"` (all sheets). **Assert:** `matchCount>0` and matches carry `sheetId`/`sheetTitle`.
@@ -93,10 +94,12 @@ Run the phases in order; later phases depend on structure built earlier. For eac
 ### Phase 8 — Utilities: outline export/import, find & replace
 37. `xmind_flatten_to_outline` → `sheetMain`, `format="markdown"`, `include_notes=true`. **Assert:** Markdown text listing the topic titles.
 38. `xmind_flatten_to_outline` → `topic_id=alphaId`, `format="text"`. **Assert:** indented plain-text outline of Alpha's subtree.
-39. `xmind_import_from_outline` → `outline="# Imported\n- Child 1\n- Child 2"`, omit `sheet_id` (creates a new sheet). **Assert** via `xmind_list_sheets`: a new sheet was added.
-40. `xmind_import_from_outline` → `outline="- Extra A\n- Extra B"`, `sheet_id=sheetMain`, `parent_id=rootId`. **Assert** via `xmind_get_subtree`: `Extra A` and `Extra B` now under root.
-41. `xmind_find_and_replace` → `sheet_id=sheetMain`, `find="Alpha"`, `replace="Alfa"`. **Assert** via `xmind_search_topics`: `Alfa` present, `Alpha` no longer matches.
-42. `xmind_find_and_replace` → omit `sheet_id` (all sheets), `find="Beta"`, `replace="Beta!"`, `exact_match=true`. **Assert** via `xmind_search_topics`: exact-titled `Beta` renamed.
+39. `xmind_import_from_outline` → `outline="# Imported\n- Child 1\n- Child 2"`, omit `sheet_id` (creates a new sheet). Capture `sheetImported` from the result. **Assert:** result says `imported 3 topics`; `xmind_list_sheets` shows a new sheet titled `"Imported"`; and `xmind_get_subtree(sheetImported)` shows root `"Imported"` with children exactly `[Child 1, Child 2]` (list items under a heading must not be dropped).
+40. `xmind_import_from_outline` → `outline="- Solo A\n- Solo B"`, omit `sheet_id` and `root_title`. Capture the new sheet id. **Assert:** result says `imported 3 topics` (the synthesized root counts); `xmind_get_subtree` on that sheet shows root `"Imported Outline"` with children exactly `[Solo A, Solo B]` (several top-level items become siblings under a synthesized root).
+41. `xmind_import_from_outline` → same outline, `root_title="Solos"`, omit `sheet_id`. Capture the new sheet id. **Assert:** result says `imported 3 topics`; the sheet and its root are both titled `"Solos"`; root children exactly `[Solo A, Solo B]`.
+42. `xmind_import_from_outline` → `outline="- Extra A\n- Extra B"`, `sheet_id=sheetMain`, `parent_id=rootId`. **Assert** via `xmind_get_subtree`: `Extra A` and `Extra B` now under root.
+43. `xmind_find_and_replace` → `sheet_id=sheetMain`, `find="Alpha"`, `replace="Alfa"`. **Assert** via `xmind_search_topics`: `Alfa` present, `Alpha` no longer matches.
+44. `xmind_find_and_replace` → omit `sheet_id` (all sheets), `find="Beta"`, `replace="Beta!"`, `exact_match=true`. **Assert** via `xmind_search_topics`: exact-titled `Beta` renamed.
 
 ### Phase 9 — Error paths (must return tool errors, not crashes)
 For each, PASS = a recoverable **tool error** with a readable message; FAIL = protocol error/crash, a misleading message, or unexpected success.
@@ -112,8 +115,8 @@ E7. Create the **error-scenario file** with `xmind_create_map` (single sheet). T
 ## Cleanup
 
 After the run, remove the scratch and error-scenario files so the next run starts clean. There is no MCP "delete map" tool, so:
-- If a filesystem/shell tool is available, delete both files.
-- If not, **report their full paths** and ask the operator to delete them (a leftover file will make the next `xmind_create_map` fail).
+- Delete both files only with a filesystem/shell tool that runs on the **same machine as the xmind-mcp server**. A shell in a cloud sandbox or a different container cannot see the server's files, so its `rm` deletes nothing even when it reports success.
+- Otherwise, **report their full paths** and ask the operator to delete them (a leftover file will make the next `xmind_create_map` fail).
 
 ## Reporting
 
