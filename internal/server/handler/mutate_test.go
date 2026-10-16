@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -384,6 +385,81 @@ func TestAddTopicAndRevisionID(t *testing.T) {
 	}
 
 	assertPostAddTopicChildPersisted(t, path, revBefore, newID)
+}
+
+// callResult is one handler call's outcome, collected off the test goroutine.
+type callResult struct {
+	res *mcp.CallToolResult
+	err error
+}
+
+// addTopicsConcurrently calls AddTopic n times at once under parentID, with titles T1..Tn,
+// and returns each call's outcome by index.
+func addTopicsConcurrently(h *XMindHandler, path, sheetID, parentID string, n int) []callResult {
+	results := make([]callResult, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			<-start
+			req := mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{
+				"path":      path,
+				"sheet_id":  sheetID,
+				"parent_id": parentID,
+				"title":     fmt.Sprintf("T%d", i+1),
+			}}}
+			res, err := h.AddTopic(context.Background(), req)
+			results[i] = callResult{res, err}
+		})
+	}
+	close(start)
+	wg.Wait()
+	return results
+}
+
+// TestConcurrentAddTopicNoLostUpdates checks that overlapping AddTopic calls on one file,
+// as the stdio server's worker pool runs them, each persist their topic instead of the
+// last commit overwriting the others.
+func TestConcurrentAddTopicNoLostUpdates(t *testing.T) {
+	const n = 20
+	h := NewXMindHandler()
+	path := copyFixture(t, kitchenSinkPath(t))
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID, root := sheets[0].ID, &sheets[0].RootTopic
+	before := len(root.Children.Attached)
+
+	wantIDs := make(map[string]bool, n)
+	for i, r := range addTopicsConcurrently(h, path, sheetID, root.ID, n) {
+		if r.err != nil {
+			t.Fatalf("call %d: protocol error: %v", i+1, r.err)
+		}
+		wantIDs[parseAddTopicResult(t, r.res).ID] = true
+	}
+
+	after, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached := after[0].RootTopic.Children.Attached
+	if len(attached) != before+n {
+		t.Fatalf("root has %d attached topics, want %d (%d before + %d added)", len(attached), before+n, before, n)
+	}
+	titles := make(map[string]bool, len(attached))
+	for _, c := range attached {
+		titles[c.Title] = true
+		delete(wantIDs, c.ID)
+	}
+	for i := 1; i <= n; i++ {
+		if !titles[fmt.Sprintf("T%d", i)] {
+			t.Errorf("topic T%d missing after concurrent adds", i)
+		}
+	}
+	if len(wantIDs) != 0 {
+		t.Errorf("returned ids missing from the file: %v", wantIDs)
+	}
 }
 
 func TestAddTopicTitleAmpersandWritesLiteralContentJSON(t *testing.T) {

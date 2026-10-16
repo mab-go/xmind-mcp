@@ -53,6 +53,7 @@ internal/
     reader.go             — open zip, parse content.json → []Sheet (ReadMap, parseContentFromZip)
     writer.go             — serialize []Sheet → content.json, write back to zip (WriteMap, writeMapBody)
     update.go             — OpenMapForUpdate/MapWriter: single-open read-then-commit handle for mutations
+    pathlock.go           — lockPath/resolveMapPath: in-process per-file write lock, keyed by the symlink-resolved path
     atomic_replace.go     — replaceTempFile/replaceViaBackup: atomic replace (backup-restore on Windows)
     defaults.go           — DefaultTheme and DefaultSheetExtensions for new maps
     default_theme.json    — embedded default theme blob (sourced from kitchen-sink fixture)
@@ -96,17 +97,24 @@ fine for plain text searches, non-code files, and quick locate-by-string.
 Every mutating tool call follows this exact pattern — do not deviate from it:
 
 ```
-1. Open the .xmind zip archive
+1. Acquire the in-process per-path lock and open the .xmind zip archive
 2. Read and parse content.json into []Sheet
 3. Apply the change to the in-memory structs
 4. Serialize the updated structs back to JSON
 5. Write the updated content.json to a temp file, then atomically swap it in
-6. Return result
+6. Release the lock (Commit or Close)
+7. Return result
 ```
 
 **Atomicity is required.** Always write to a temp file first and rename/swap on success. If a write fails mid-way, the original file must be left untouched. There is no session state and no temp files left behind on failure. Close every file handle in a `defer`, guarded by a flag when ownership passes to the caller (as `WriteMap` and `OpenMapForUpdate` do), not only on error returns, so no early exit, including a panic, can leak it.
 
-**Single-open mutation path.** Mutating handlers open the `.xmind` once via `xmind.OpenMapForUpdate` (through the `statAndOpenMapForUpdate` / `loadSheet…ForUpdate` helpers), which returns the parsed `[]Sheet` plus a `*xmind.MapWriter` that keeps the zip reader open. The handler mutates the sheets in memory and calls `mw.Commit(sheets)` to persist them, raw-copying the still-open non-`content.json` entries (steps 1–5 above happen across one file open instead of two). `Commit` closes the read handle *before* the atomic swap, so on Windows the swap runs with no open handle on the original. `Commit` is single-use (a second `Commit`, or one after `Close`, errors). The free-standing `xmind.WriteMap` (which re-reads the file fresh) is retained for tests and any read-fresh caller; `xmind.CreateNewMap` writes brand-new maps and never overwrites: it claims the destination with `O_CREATE|O_EXCL` before writing (an existing path fails with an error wrapping `fs.ErrExist`), renames the finished temp file over that empty placeholder, and removes the placeholder on failure. Callers must not add their own existence check, which would race with a concurrent creator; to replace a file deliberately (e.g. `cmd/gen-example`), remove it first. The temp-then-swap mechanics below are unchanged and shared by both `WriteMap` and `Commit` via the internal `writeMapBody`.
+**Single-open mutation path.** Mutating handlers open the `.xmind` once via `xmind.OpenMapForUpdate` (through the `statAndOpenMapForUpdate` / `loadSheet…ForUpdate` helpers), which returns the parsed `[]Sheet` plus a `*xmind.MapWriter` that keeps the zip reader open. The handler mutates the sheets in memory and calls `mw.Commit(sheets)` to persist them, raw-copying the still-open non-`content.json` entries (steps 1–5 above happen across one file open instead of two). `Commit` closes the read handle *before* the atomic swap, so on Windows the swap runs with no open handle on the original. `Commit` is single-use (a second `Commit`, or one after `Close`, errors). The free-standing `xmind.WriteMap` (which re-reads the file fresh) is retained for tests and any read-fresh caller; `xmind.CreateNewMap` writes brand-new maps and never overwrites: it claims the destination with `O_CREATE|O_EXCL` before writing (an existing path fails with an error wrapping `fs.ErrExist`), renames the finished temp file over that empty placeholder, and removes the placeholder on failure. Callers must not add their own existence check, which would race with a concurrent creator; to replace a file deliberately (e.g. `cmd/gen-example`), remove it first. The temp-then-swap mechanics below are unchanged and shared by both `WriteMap` and `Commit` via the internal `writeMapBody`, which swaps onto the symlink-resolved path (creating the temp file in the real file's directory), so an edit through a symlink to the map updates the real file and leaves the link in place.
+
+**Per-path write lock.** Steps 1–6 hold an in-process lock for the file (`lockPath` in `internal/xmind/pathlock.go`), so overlapping tool calls (mcp-go runs `tools/call` on a worker pool) on one file run one at a time instead of each committing over the others' changes. `OpenMapForUpdate` acquires it and the `MapWriter` holds it until a successful `Commit` or `Close`; the mandatory `defer mw.Close()` is what releases it on every other path, so handlers need no lock code of their own. `WriteMap` holds it for its own re-read and swap (not for a caller's earlier read), and `CreateNewMap` holds it from before the `O_EXCL` claim until the rename, so a locked writer never opens the empty placeholder. The key is the absolute path with symlinks resolved (best effort: the directory alone for a file not yet created), the same path the swap replaces, so a symlinked directory or a symlink to the file shares the real file's lock. Reads take no lock: the rename is atomic, so a reader sees the old or the new file (or, during `CreateNewMap`, the empty placeholder). The lock is not reentrant: while a goroutine holds a `MapWriter` for a file, it must not call `OpenMapForUpdate`, `WriteMap`, or `CreateNewMap` on that file. What it does **not** cover:
+
+- **Other processes.** A second xmind-mcp process, the XMind app, or any other editor writing the same file can still overwrite changes. There is no cross-process file lock.
+- **Request ordering.** Concurrent or pipelined calls run in no defined order. A client that sends `xmind_create_map` and then `xmind_open_map` without awaiting the first response can still get "file not found". Ordering is the client's job (await the response).
+- **Other names for the same file.** On a case-insensitive filesystem, paths that differ only in case get separate locks, and so do hard links to the same file.
 
 The temp-then-swap happens in `replaceTempFile` (`internal/xmind/atomic_replace.go`). On Unix, `os.Rename` atomically replaces the destination. On Windows, `os.Rename` cannot overwrite an existing file, so `replaceViaBackup` moves the original aside to a uniquely named backup first, renames the temp into place, then removes the backup — restoring the backup if the rename fails. This keeps the original recoverable on Windows; never reintroduce a plain remove-then-rename there, which can destroy the original if the rename fails.
 
@@ -484,7 +492,7 @@ The codebase is organized in layers. When making changes, understand which layer
 | Layer | Packages / Files | Depends on |
 |---|---|---|
 | Schema | `internal/xmind/types.go`, `json_codec.go` | stdlib only |
-| I/O | `internal/xmind/reader.go`, `writer.go`, `atomic_replace.go` | Schema layer |
+| I/O | `internal/xmind/reader.go`, `writer.go`, `update.go`, `pathlock.go`, `atomic_replace.go` | Schema layer |
 | Handlers | `internal/server/handler/*.go` | I/O layer, Schema layer |
 | Server wiring | `internal/server/server.go`, `tools.go`, `hooks.go`, `recovery.go`, `instructions.go` | Handlers |
 | Entry point | `cmd/xmind-mcp/main.go` | Server wiring |
