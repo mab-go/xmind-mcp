@@ -31,12 +31,12 @@ cmd/
 internal/
   server/
     server.go             — MCP server setup and tool registration
-    server_test.go        — asserts server capabilities (no MCP logging), instructions, and panic recovery
+    server_test.go        — asserts server capabilities (no MCP logging), instructions, server/discover, lifecycle hook logging, and panic recovery
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints
-    hooks.go              — MCP lifecycle hooks (before/after initialize)
+    hooks.go              — MCP lifecycle hooks (initialize and server/discover)
     recovery.go           — tool-handler middleware: recovers panics, logs tool.panic with a stack trace
-    instructions.go       — server instructions sent in the initialize result
+    instructions.go       — server instructions sent in the initialize and server/discover results
     events.go             — logging event-name constants (logging.Event)
     handler/
       handler.go          — XMindHandler struct and shared utilities (textResult, jsonResult, etc.)
@@ -173,7 +173,7 @@ All tool names are prefixed with `xmind_` to avoid collisions in multi-server en
 
 ### Server instructions
 
-`serverInstructions` in `internal/server/instructions.go` is sent in the initialize result (`mcpserver.WithInstructions`); clients that support it add it to the model's context. It holds cross-tool workflow only (which tool to call first, where ids come from, when to use the bulk tools). Per-tool detail belongs in that tool's description. Every connected session pays for the text in context, so it must stay within 150 words (`TestInstructionsWordBudget`), and every `xmind_` tool it names must be registered (`TestInstructionsNameRegisteredTools`). Revisit it when a tool is added, renamed, or changes the workflow.
+`serverInstructions` in `internal/server/instructions.go` is sent in the initialize and server/discover results (`mcpserver.WithInstructions`); clients that support it add it to the model's context. It holds cross-tool workflow only (which tool to call first, where ids come from, when to use the bulk tools). Per-tool detail belongs in that tool's description. Every connected session pays for the text in context, so it must stay within 150 words (`TestInstructionsWordBudget`), and every `xmind_` tool it names must be registered (`TestInstructionsNameRegisteredTools`). Revisit it when a tool is added, renamed, or changes the workflow.
 
 ### Handler method signature
 
@@ -324,6 +324,11 @@ with the `--log-level` flag or the `XMIND_MCP_LOG_LEVEL` env var
 (`debug`/`info`/`warn`/`error`); `parseLogLevel` in `main.go` rejects unknown
 values. Reserve `Info` for events visible at the default level (e.g.
 `server.ready`, `server.stopped`); keep routine per-connection detail at `Debug`.
+The lifecycle hooks (`hooks.go`) log the client name and protocol version at
+`Debug`: `server.starting`/`server.started` on `initialize` (protocol 2025-11-25
+and earlier) and `server.discovering`/`server.discovered` on `server/discover`.
+Clients on 2026-07-28 skip `initialize` and need not call `server/discover`
+either, so such a client may log neither pair.
 The server does not declare the MCP `logging` capability (no
 `mcpserver.WithLogging()`): it never sends `notifications/message`, and MCP spec
 2026-07-28 deprecates MCP logging in favor of stderr. Don't re-add it.

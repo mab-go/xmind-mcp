@@ -19,6 +19,8 @@ func newXMindServer(ctx context.Context, h *handler.XMindHandler) *mcpserver.MCP
 	hooks := &mcpserver.Hooks{}
 	hooks.AddBeforeInitialize(hookAddBeforeInitialize(log))
 	hooks.AddAfterInitialize(hookAddAfterInitialize(log))
+	hooks.AddBeforeDiscover(hookAddBeforeDiscover(log))
+	hooks.AddAfterDiscover(hookAddAfterDiscover(log))
 
 	s := mcpserver.NewMCPServer(
 		"xmind-mcp",

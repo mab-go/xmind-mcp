@@ -1,7 +1,7 @@
 package server
 
-// serverInstructions is the usage guide sent in the initialize result; clients that
-// support it add it to the model's context. It covers cross-tool workflow only: per-tool
+// serverInstructions is the usage guide sent in the initialize and server/discover results;
+// clients that support it add it to the model's context. It covers cross-tool workflow only: per-tool
 // detail belongs in tool descriptions. Every connected session pays for it in context, so
 // keep it within 150 words (TestInstructionsWordBudget) and name only registered tools
 // (TestInstructionsNameRegisteredTools).

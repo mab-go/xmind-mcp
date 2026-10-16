@@ -176,8 +176,10 @@ If a tool handler panics, the server keeps running: it returns an internal
 error to the client and logs an `error`-level `tool.panic` line with a stack
 trace, whatever the log level.
 
-`debug` adds per-connection lifecycle detail (the MCP `initialize` handshake).
-To enable it from a client config, set it via `env`:
+`debug` adds per-connection lifecycle detail: the client's name and MCP
+protocol version, logged at the `initialize` handshake or, for clients on
+protocol 2026-07-28, at `server/discover`. To enable it from a client config,
+set it via `env`:
 
 ```json
 {
