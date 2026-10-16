@@ -30,16 +30,21 @@ func openZipReaderAtPath(path string) (*zip.Reader, *os.File, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("open xmind file: %w", err)
 	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = f.Close()
+		}
+	}()
 	st, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
 		return nil, nil, fmt.Errorf("stat xmind file: %w", err)
 	}
 	zr, err := zip.NewReader(f, st.Size())
 	if err != nil {
-		_ = f.Close()
 		return nil, nil, fmt.Errorf("read zip: %w", err)
 	}
+	ok = true
 	return zr, f, nil
 }
 
@@ -175,6 +180,7 @@ func writeMapBody(path string, sheets []Sheet, zr *zip.Reader, releaseSource fun
 	swapped := false
 	defer func() {
 		if !swapped {
+			_ = tmp.Close()
 			_ = os.Remove(tmpPath)
 		}
 	}()
@@ -241,6 +247,7 @@ func CreateNewMap(path string, sheets []Sheet) error {
 	committed := false
 	defer func() {
 		if !committed {
+			_ = tmp.Close()
 			_ = os.Remove(tmpPath)
 		}
 	}()

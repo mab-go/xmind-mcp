@@ -29,13 +29,19 @@ func OpenMapForUpdate(path string) (sheets []Sheet, mw *MapWriter, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			_ = f.Close()
+		}
+	}()
 
 	sheets, err = parseContentFromZip(zr)
 	if err != nil {
-		_ = f.Close()
 		return nil, nil, err
 	}
 
+	handedOff = true
 	return sheets, &MapWriter{path: path, file: f, zr: zr}, nil
 }
 
