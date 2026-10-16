@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -13,6 +14,9 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
+
+// initializeRequest is a minimal initialize request for tests that need the handshake.
+const initializeRequest = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
 
 // handleJSON sends one JSON-RPC message to s and returns the response decoded as a generic map.
 func handleJSON(t *testing.T, s *mcpserver.MCPServer, msg string) map[string]any {
@@ -33,7 +37,7 @@ func handleJSON(t *testing.T, s *mcpserver.MCPServer, msg string) map[string]any
 func TestServerDoesNotAdvertiseLogging(t *testing.T) {
 	s := newXMindServer(context.Background(), handler.NewXMindHandler())
 
-	resp := handleJSON(t, s, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`)
+	resp := handleJSON(t, s, initializeRequest)
 	result, _ := resp["result"].(map[string]any)
 	caps, ok := result["capabilities"].(map[string]any)
 	if !ok {
@@ -53,6 +57,42 @@ func TestServerDoesNotAdvertiseLogging(t *testing.T) {
 	}
 }
 
+// TestInitializeReturnsInstructions checks the initialize result carries serverInstructions.
+func TestInitializeReturnsInstructions(t *testing.T) {
+	s := newXMindServer(context.Background(), handler.NewXMindHandler())
+
+	resp := handleJSON(t, s, initializeRequest)
+	result, _ := resp["result"].(map[string]any)
+	if got, _ := result["instructions"].(string); got != serverInstructions {
+		t.Errorf("initialize result.instructions = %q, want serverInstructions", got)
+	}
+}
+
+// TestInstructionsNameRegisteredTools checks every tool named in serverInstructions is
+// registered, so renaming or removing a tool cannot leave stale guidance behind.
+func TestInstructionsNameRegisteredTools(t *testing.T) {
+	s := newXMindServer(context.Background(), handler.NewXMindHandler())
+
+	names := regexp.MustCompile(`\bxmind_[A-Za-z0-9_-]*[A-Za-z0-9]`).FindAllString(serverInstructions, -1)
+	if len(names) == 0 {
+		t.Fatal("serverInstructions names no xmind_ tools; check the pattern")
+	}
+	for _, name := range names {
+		if s.GetTool(name) == nil {
+			t.Errorf("serverInstructions names %q, which is not a registered tool", name)
+		}
+	}
+}
+
+// TestInstructionsWordBudget keeps serverInstructions short: every connected session
+// pays for it in context.
+func TestInstructionsWordBudget(t *testing.T) {
+	const maxWords = 150
+	if n := len(strings.Fields(serverInstructions)); n > maxWords {
+		t.Errorf("serverInstructions has %d words, want at most %d", n, maxWords)
+	}
+}
+
 // TestToolHandlerPanicIsRecovered checks a panic in a tool handler becomes an internal-error
 // response and a tool.panic log entry with a stack trace, instead of crashing the server.
 func TestToolHandlerPanicIsRecovered(t *testing.T) {
@@ -63,7 +103,7 @@ func TestToolHandlerPanicIsRecovered(t *testing.T) {
 		panic("boom")
 	})
 
-	handleJSON(t, s, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`)
+	handleJSON(t, s, initializeRequest)
 	resp := handleJSON(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"panic_probe","arguments":{}}}`)
 
 	errObj, ok := resp["error"].(map[string]any)

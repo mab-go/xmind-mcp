@@ -31,11 +31,12 @@ cmd/
 internal/
   server/
     server.go             — MCP server setup and tool registration
-    server_test.go        — asserts server capabilities (no MCP logging) and panic recovery
+    server_test.go        — asserts server capabilities (no MCP logging), instructions, and panic recovery
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints
     hooks.go              — MCP lifecycle hooks (before/after initialize)
     recovery.go           — tool-handler middleware: recovers panics, logs tool.panic with a stack trace
+    instructions.go       — server instructions sent in the initialize result
     events.go             — logging event-name constants (logging.Event)
     handler/
       handler.go          — XMindHandler struct and shared utilities (textResult, jsonResult, etc.)
@@ -159,6 +160,10 @@ s.AddTool(toolOpenMap, h.OpenMap)
 ```
 
 All tool names are prefixed with `xmind_` to avoid collisions in multi-server environments.
+
+### Server instructions
+
+`serverInstructions` in `internal/server/instructions.go` is sent in the initialize result (`mcpserver.WithInstructions`); clients that support it add it to the model's context. It holds cross-tool workflow only (which tool to call first, where ids come from, when to use the bulk tools). Per-tool detail belongs in that tool's description. Every connected session pays for the text in context, so it must stay within 150 words (`TestInstructionsWordBudget`), and every `xmind_` tool it names must be registered (`TestInstructionsNameRegisteredTools`). Revisit it when a tool is added, renamed, or changes the workflow.
 
 ### Handler method signature
 
@@ -481,7 +486,7 @@ The codebase is organized in layers. When making changes, understand which layer
 | Schema | `internal/xmind/types.go`, `json_codec.go` | stdlib only |
 | I/O | `internal/xmind/reader.go`, `writer.go`, `atomic_replace.go` | Schema layer |
 | Handlers | `internal/server/handler/*.go` | I/O layer, Schema layer |
-| Server wiring | `internal/server/server.go`, `tools.go`, `hooks.go`, `recovery.go` | Handlers |
+| Server wiring | `internal/server/server.go`, `tools.go`, `hooks.go`, `recovery.go`, `instructions.go` | Handlers |
 | Entry point | `cmd/xmind-mcp/main.go` | Server wiring |
 
 Changes to the Schema layer (adding/removing struct fields, modifying codec allowlists) will ripple into handlers. Changes to handlers are self-contained as long as the I/O layer API is stable. Never import handler packages from the xmind package or vice versa.
