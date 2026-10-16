@@ -217,13 +217,10 @@ func parseImportOutlineSheetArgs(args map[string]any) (sheetID, parentID, rootTi
 const defaultImportRootTitle = "Imported Outline"
 
 // importOutlineNewSheet appends a sheet built from the outline; see newSheetRootFromForest for
-// how its root is chosen.
+// how its root is chosen. pairs must be non-empty (ImportFromOutline rejects an empty outline),
+// so the forest has at least one tree.
 func importOutlineNewSheet(mw *xmind.MapWriter, sheets []xmind.Sheet, pairs []outlinePair, rootTitle string) (*mcp.CallToolResult, error) {
-	forest := buildOutlineForest(pairs)
-	if len(forest) == 0 {
-		return mcp.NewToolResultError("could not build outline tree"), nil
-	}
-	title, children := newSheetRootFromForest(forest, rootTitle)
+	title, children := newSheetRootFromForest(buildOutlineForest(pairs), rootTitle)
 	bumpAllSheetsRevisionID(sheets)
 	sh := newSheet(title, title)
 	ch := ensureChildren(&sh.RootTopic)
