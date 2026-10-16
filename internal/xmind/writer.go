@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -121,7 +122,10 @@ func abortZipWriterAndFile(zw *zip.Writer, tmp *os.File) {
 	_ = tmp.Close()
 }
 
-func finishZipTempFile(zw *zip.Writer, tmp *os.File, tmpPath, dst string) error {
+// finishZipTempFile completes the temp file, gives it permission bits perm, and swaps it
+// into dst. os.CreateTemp always creates files with mode 0600, so without the chmod every
+// write would leave the map readable only by its owner.
+func finishZipTempFile(zw *zip.Writer, tmp *os.File, tmpPath, dst string, perm fs.FileMode) error {
 	if err := zw.Close(); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("close zip writer: %w", err)
@@ -129,6 +133,10 @@ func finishZipTempFile(zw *zip.Writer, tmp *os.File, tmpPath, dst string) error 
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("set temp file mode: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
@@ -176,11 +184,17 @@ func WriteMap(path string, sheets []Sheet) error {
 // symlink with a regular file. releaseSource is invoked once the entry copy is complete
 // (and before the atomic swap) so the caller can close the source handle that backs zr;
 // this lets the swap run with no open handle on the original. On any failure the temp
-// file is removed and the original is left untouched.
+// file is removed and the original is left untouched. The new file keeps the original's
+// permission bits.
 func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func() error) error {
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
 		return fmt.Errorf("marshal content.json: %w", err)
+	}
+
+	orig, err := os.Stat(dst)
+	if err != nil {
+		return fmt.Errorf("stat target: %w", err)
 	}
 
 	dir := filepath.Dir(dst)
@@ -216,7 +230,7 @@ func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func
 		}
 	}
 
-	if err := finishZipTempFile(zw, tmp, tmpPath, dst); err != nil {
+	if err := finishZipTempFile(zw, tmp, tmpPath, dst, orig.Mode().Perm()); err != nil {
 		return err
 	}
 	swapped = true
@@ -229,7 +243,9 @@ func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func
 // It never overwrites. It first claims path with O_CREATE|O_EXCL, which is atomic, so a
 // file that already exists (or appears concurrently) is left alone and the returned error
 // wraps fs.ErrExist. The finished temp file is then renamed over that empty placeholder;
-// on any failure the placeholder is removed.
+// on any failure the placeholder is removed. The placeholder is created with mode 0666
+// filtered by the process umask (as os.Create does), and the finished map gets the same
+// permission bits.
 //
 // It holds the file's in-process write lock (see lockPath) from before the claim until
 // the rename or cleanup, so a concurrent OpenMapForUpdate never opens the empty
@@ -244,7 +260,7 @@ func CreateNewMap(path string, sheets []Sheet) error {
 		return fmt.Errorf("marshal content.json: %w", err)
 	}
 
-	placeholder, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	placeholder, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return fmt.Errorf("create map file: %w", err)
 	}
@@ -254,8 +270,9 @@ func CreateNewMap(path string, sheets []Sheet) error {
 			_ = os.Remove(path)
 		}
 	}()
-	if err := placeholder.Close(); err != nil {
-		return fmt.Errorf("close placeholder: %w", err)
+	perm, err := closePlaceholder(placeholder)
+	if err != nil {
+		return err
 	}
 
 	dir := filepath.Dir(path)
@@ -279,10 +296,24 @@ func CreateNewMap(path string, sheets []Sheet) error {
 		return err
 	}
 
-	if err := finishZipTempFile(zw, tmp, tmpPath, path); err != nil {
+	if err := finishZipTempFile(zw, tmp, tmpPath, path, perm); err != nil {
 		return err
 	}
 	committed = true
 	published = true
 	return nil
+}
+
+// closePlaceholder closes the empty file CreateNewMap claimed and returns its permission
+// bits, which the umask has already filtered, for the finished map to reuse.
+func closePlaceholder(placeholder *os.File) (fs.FileMode, error) {
+	st, err := placeholder.Stat()
+	if err != nil {
+		_ = placeholder.Close()
+		return 0, fmt.Errorf("stat placeholder: %w", err)
+	}
+	if err := placeholder.Close(); err != nil {
+		return 0, fmt.Errorf("close placeholder: %w", err)
+	}
+	return st.Mode().Perm(), nil
 }
