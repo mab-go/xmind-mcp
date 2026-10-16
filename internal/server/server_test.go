@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,6 +18,10 @@ import (
 
 // initializeRequest is a minimal initialize request for tests that need the handshake.
 const initializeRequest = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
+
+// discoverRequest is a minimal server/discover request from a 2026-07-28 client, which skips
+// initialize and sends its protocol version, client info, and capabilities in _meta.
+const discoverRequest = `{"jsonrpc":"2.0","id":2,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}`
 
 // handleJSON sends one JSON-RPC message to s and returns the response decoded as a generic map.
 func handleJSON(t *testing.T, s *mcpserver.MCPServer, msg string) map[string]any {
@@ -65,6 +70,66 @@ func TestInitializeReturnsInstructions(t *testing.T) {
 	result, _ := resp["result"].(map[string]any)
 	if got, _ := result["instructions"].(string); got != serverInstructions {
 		t.Errorf("initialize result.instructions = %q, want serverInstructions", got)
+	}
+}
+
+// TestDiscoverAdvertisesServer checks a 2026-07-28 client, which skips initialize, gets the
+// same server surface from server/discover: protocol versions, instructions, and capabilities.
+func TestDiscoverAdvertisesServer(t *testing.T) {
+	s := newXMindServer(context.Background(), handler.NewXMindHandler())
+
+	resp := handleJSON(t, s, discoverRequest)
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("server/discover response = %v, want a result", resp)
+	}
+	versions, _ := result["supportedVersions"].([]any)
+	for _, want := range []string{"2026-07-28", "2025-11-25"} {
+		if !slices.Contains(versions, any(want)) {
+			t.Errorf("supportedVersions = %v, want it to contain %q", versions, want)
+		}
+	}
+	if got, _ := result["instructions"].(string); got != serverInstructions {
+		t.Errorf("server/discover result.instructions = %q, want serverInstructions", got)
+	}
+	caps, _ := result["capabilities"].(map[string]any)
+	if _, ok := caps["tools"]; !ok {
+		t.Errorf("capabilities = %v, want a tools entry", caps)
+	}
+	if _, ok := caps["logging"]; ok {
+		t.Errorf("capabilities = %v, want no logging entry", caps)
+	}
+}
+
+// TestLifecycleHooksLogClient checks the initialize and server/discover hooks log the
+// client and its protocol version at Debug, each on its own event's line.
+func TestLifecycleHooksLogClient(t *testing.T) {
+	var buf bytes.Buffer
+	log := logging.NewLogger(logging.Config{Level: logging.DebugLevel, Output: &buf})
+	s := newXMindServer(logging.NewContext(context.Background(), log), handler.NewXMindHandler())
+
+	handleJSON(t, s, initializeRequest)
+	handleJSON(t, s, discoverRequest)
+
+	lines := strings.Split(buf.String(), "\n")
+	for event, fields := range map[string][]string{
+		"server.starting":    {"client=test", "protocol=2025-11-25"},
+		"server.started":     {"protocol=2025-11-25"},
+		"server.discovering": {"client=test", "protocol=2026-07-28"},
+		"server.discovered":  nil,
+	} {
+		i := slices.IndexFunc(lines, func(line string) bool {
+			return strings.Contains(line, "event="+event)
+		})
+		if i < 0 {
+			t.Errorf("log output = %q, want an event=%s line", buf.String(), event)
+			continue
+		}
+		for _, want := range fields {
+			if !strings.Contains(lines[i], want) {
+				t.Errorf("event=%s line = %q, want it to contain %q", event, lines[i], want)
+			}
+		}
 	}
 }
 
