@@ -101,3 +101,50 @@ func TestWithAnnotationsPanicsOnUnknownEffect(t *testing.T) {
 		})
 	}
 }
+
+// nonNegativeIntParams lists, per tool, every numeric parameter. Each takes a
+// non-negative whole number and must be declared with mcp.WithInteger and mcp.Min(0).
+var nonNegativeIntParams = map[string][]string{
+	"xmind_get_subtree":     {"depth"},
+	"xmind_add_topic":       {"position"},
+	"xmind_duplicate_topic": {"position"},
+	"xmind_move_topic":      {"position"},
+	"xmind_add_summary":     {"from_index", "to_index"},
+}
+
+func TestNumericParamsAreNonNegativeIntegers(t *testing.T) {
+	// numeric maps "tool/param" to the property schema of every number or integer parameter.
+	numeric := map[string]map[string]any{}
+	for name, st := range newXMindServer(context.Background(), handler.NewXMindHandler()).ListTools() {
+		for param, raw := range st.Tool.InputSchema.Properties {
+			prop, _ := raw.(map[string]any)
+			if prop["type"] == "number" || prop["type"] == "integer" {
+				numeric[name+"/"+param] = prop
+			}
+		}
+	}
+
+	for name, params := range nonNegativeIntParams {
+		for _, param := range params {
+			key := name + "/" + param
+			t.Run(key, func(t *testing.T) {
+				prop, ok := numeric[key]
+				if !ok {
+					t.Fatal("not a numeric parameter of a registered tool")
+				}
+				if prop["type"] != "integer" {
+					t.Errorf("type = %v, want integer", prop["type"])
+				}
+				if prop["minimum"] != 0 {
+					t.Errorf("minimum = %v (%T), want 0", prop["minimum"], prop["minimum"])
+				}
+			})
+			delete(numeric, key)
+		}
+	}
+
+	for key, prop := range numeric {
+		t.Errorf("%s: %v parameter missing from nonNegativeIntParams; declare whole numbers with mcp.WithInteger(..., mcp.Min(0)) and list them there",
+			key, prop["type"])
+	}
+}

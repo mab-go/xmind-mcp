@@ -113,7 +113,7 @@ var toolGetSubtree = mcp.NewTool(
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet to read from")),
 	mcp.WithString("topic_id", mcp.Description("Root of the subtree; omit for sheet root")),
-	mcp.WithNumber("depth", mcp.Description("Max depth from subtree root (0 = root only with counts); omit for full tree; must be a whole number")),
+	mcp.WithInteger("depth", mcp.Min(0), mcp.Description("Max depth from subtree root (0 = root only with counts); omit for full tree")),
 	mcp.WithBoolean("include_notes", mcp.Description("If true, include plain-text notes (notes.plain content) on nodes that have note text; omitted when empty")),
 	mcp.WithBoolean("include_links", mcp.Description("If true, include hyperlink href on nodes that have a link; omitted when empty")),
 )
@@ -185,7 +185,7 @@ var toolAddTopic = mcp.NewTool(
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("ID of the parent topic")),
 	mcp.WithString("title", mcp.Required(), mcp.Description("Title of the new topic")),
-	mcp.WithNumber("position", mcp.Description("Sibling index to insert at; omit to append")),
+	mcp.WithInteger("position", mcp.Min(0), mcp.Description("Sibling index to insert at; omit to append")),
 	mcp.WithString("notes", mcp.Description("Plain text note; same semantics as xmind_set_topic_properties")),
 	mcp.WithArray("labels", mcp.Description("List of label strings; empty array sets no labels")),
 	mcp.WithArray("markers", mcp.Description(`Marker ID list, e.g. "priority-1", "task-done"`)),
@@ -222,7 +222,7 @@ var toolDuplicateTopic = mcp.NewTool(
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Sheet containing the source topic")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("Root topic of the subtree to duplicate")),
 	mcp.WithString("target_parent_id", mcp.Required(), mcp.Description("Parent topic to attach the copy under (attached children)")),
-	mcp.WithNumber("position", mcp.Description("Zero-based index among the parent's attached children; omit to append")),
+	mcp.WithInteger("position", mcp.Min(0), mcp.Description("Zero-based index among the parent's attached children; omit to append")),
 )
 
 var toolRenameTopic = mcp.NewTool(
@@ -253,7 +253,7 @@ var toolMoveTopic = mcp.NewTool(
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to move")),
 	mcp.WithString("new_parent_id", mcp.Required(), mcp.Description("ID of the new parent topic")),
-	mcp.WithNumber("position", mcp.Description("Zero-based insertion index among the new parent's attached children (0 = first child); valid range is 0 to the current child count. Omit to append at end.")),
+	mcp.WithInteger("position", mcp.Min(0), mcp.Description("Zero-based insertion index among the new parent's attached children (0 = first child); valid range is 0 to the current child count. Omit to append at end.")),
 )
 
 var toolReorderChildren = mcp.NewTool(
@@ -354,8 +354,8 @@ var toolAddSummary = mcp.NewTool(
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("parent_id", mcp.Required(), mcp.Description("Parent topic whose attached children are summarized")),
-	mcp.WithNumber("from_index", mcp.Required(), mcp.Description("Zero-based index of first sibling (inclusive)")),
-	mcp.WithNumber("to_index", mcp.Required(), mcp.Description("Zero-based index of last sibling (inclusive)")),
+	mcp.WithInteger("from_index", mcp.Required(), mcp.Min(0), mcp.Description("Zero-based index of first sibling (inclusive)")),
+	mcp.WithInteger("to_index", mcp.Required(), mcp.Min(0), mcp.Description("Zero-based index of last sibling (inclusive)")),
 	mcp.WithString("title", mcp.Description("Optional summary topic title")),
 )
 
