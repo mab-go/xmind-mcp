@@ -78,7 +78,7 @@ Run the phases in order; later phases depend on structure built earlier. For eac
 26. `xmind_move_topic` → `gammaId`, `new_parent_id=betaId`, `position=0`. **Assert:** result `parentId=betaId`; `xmind_get_subtree(betaId)` shows Gamma as child. (Root children now `[Alpha, Beta]`.)
 27. `xmind_reorder_children` → parent `rootId`, `ordered_ids=[betaId, alphaId]` (must list every attached child exactly once). **Assert** via `xmind_get_subtree`: root children now `[Beta, Alpha]`.
 28. `xmind_duplicate_topic` → `topic_id=alphaId`, `target_parent_id=rootId`. Capture `newRootId`, `copiedCount`. **Assert:** `newRootId != alphaId`; `xmind_get_subtree` shows a second Alpha subtree with fresh IDs.
-29. `xmind_add_floating_topic` → `sheetMain`, `title="Floater"`. **Assert** via `xmind_get_topic_properties(rootId)`: `childCounts.detached >= 1`.
+29. `xmind_add_floating_topic` → `sheetMain`, `title="Floater"`. **Assert** via `xmind_get_topic_properties(rootId)`: `childCounts.detached >= 1`; via `xmind_get_subtree(sheetMain)`: "Floater" appears in the root's children with `childType: "detached"`, and the attached children have no `childType`; and via `xmind_search_topics(sheetMain, query="Floater")`: the match has `childType: "detached"`.
 30. `xmind_delete_topic` → `newRootId` (the duplicate). **Assert** via `xmind_get_subtree`: the duplicated subtree is gone; original `Alpha` remains.
 
 ### Phase 6 — Relationships (sheet-level)
@@ -88,7 +88,7 @@ Run the phases in order; later phases depend on structure built earlier. For eac
 34. `xmind_delete_relationship` → `relId`. **Assert** via `xmind_list_relationships`: count = 0.
 
 ### Phase 7 — Summaries & boundaries
-35. `xmind_add_summary` → parent `alphaId`, `from_index=0`, `to_index=1`, `title="Sum"` (spans `A1`,`A2`). **Assert** via `xmind_get_topic_properties(alphaId)`: `summaryCount >= 1` **and** `childCounts.summary >= 1` — this confirms the required double-write (range descriptor + summary topic).
+35. `xmind_add_summary` → parent `alphaId`, `from_index=0`, `to_index=1`, `title="Sum"` (spans `A1`,`A2`). **Assert** via `xmind_get_topic_properties(alphaId)`: `summaryCount >= 1` **and** `childCounts.summary >= 1` — this confirms the required double-write (range descriptor + summary topic). Also **Assert** via `xmind_get_subtree(alphaId)`: "Sum" appears in Alpha's children with `childType: "summary"`.
 36. `xmind_add_boundary` → parent `alphaId`, `title="Bound"`. **Assert** via `xmind_get_topic_properties(alphaId)`: `boundaryCount >= 1`, a boundary with title `"Bound"`.
 
 ### Phase 8 — Utilities: outline export/import, find & replace
@@ -97,7 +97,7 @@ Run the phases in order; later phases depend on structure built earlier. For eac
 39. `xmind_import_from_outline` → `outline="# Imported\n- Child 1\n- Child 2"`, omit `sheet_id` (creates a new sheet). Capture `sheetImported` from the result. **Assert:** result says `imported 3 topics`; `xmind_list_sheets` shows a new sheet titled `"Imported"`; and `xmind_get_subtree(sheetImported)` shows root `"Imported"` with children exactly `[Child 1, Child 2]` (list items under a heading must not be dropped).
 40. `xmind_import_from_outline` → `outline="- Solo A\n- Solo B"`, omit `sheet_id` and `root_title`. Capture the new sheet id. **Assert:** result says `imported 3 topics` (the synthesized root counts); `xmind_get_subtree` on that sheet shows root `"Imported Outline"` with children exactly `[Solo A, Solo B]` (several top-level items become siblings under a synthesized root).
 41. `xmind_import_from_outline` → same outline, `root_title="Solos"`, omit `sheet_id`. Capture the new sheet id. **Assert:** result says `imported 3 topics`; the sheet and its root are both titled `"Solos"`; root children exactly `[Solo A, Solo B]`.
-42. `xmind_import_from_outline` → `outline="- Extra A\n- Extra B"`, `sheet_id=sheetMain`, `parent_id=rootId`. **Assert** via `xmind_get_subtree`: `Extra A` and `Extra B` now under root.
+42. `xmind_import_from_outline` → `outline="- Extra A\n- Extra B"`, `sheet_id=sheetMain`, `parent_id=rootId`. **Assert** via `xmind_get_subtree`: `Extra A` and `Extra B` now under root. The result text carries no ids, so capture `extraAId` and `extraBId` from this read-back (E5 needs them).
 43. `xmind_find_and_replace` → `sheet_id=sheetMain`, `find="Alpha"`, `replace="Alfa"`. **Assert** via `xmind_search_topics`: `Alfa` present, `Alpha` no longer matches.
 44. `xmind_find_and_replace` → omit `sheet_id` (all sheets), `find="Beta"`, `replace="Beta!"`, `exact_match=true`. **Assert** via `xmind_search_topics`: exact-titled `Beta` renamed.
 
@@ -108,7 +108,7 @@ E1. `xmind_open_map` → a path that does not exist. **Expect:** tool error (fil
 E2. `xmind_create_map` → the existing scratch path. **Expect:** tool error ("file already exists").
 E3. `xmind_get_topic_properties` → `sheetMain`, `topic_id="does-not-exist"`. **Expect:** tool error ("topic not found").
 E4. `xmind_delete_topic` → `sheetMain`, `topic_id=rootId`. **Expect:** tool error (cannot delete the sheet root).
-E5. `xmind_reorder_children` → `rootId` with an `ordered_ids` list that keeps the same length but replaces one real child id with a fake id (e.g. `["fake-id", alphaId]`). **Expect:** tool error ("ordered_ids contains unknown id"). Note: the handler checks list length first, so a list of the *wrong length* instead returns a length-mismatch error — also a valid tool error, but a different message.
+E5. `xmind_reorder_children` → `rootId` with an `ordered_ids` list built from the root's **current attached** children, with one real id replaced by a fake id. Take the list from a fresh `xmind_get_subtree(sheetMain)`: use the root's children that have no `childType` (skip "Floater", which is `childType: "detached"`). At this point that is `[betaId, alphaId, extraAId, extraBId]`, so send e.g. `["fake-id", alphaId, extraAId, extraBId]`. **Expect:** tool error ("ordered_ids contains unknown id"). Note: the handler checks list length first, so a list of the *wrong length* instead returns a length-mismatch error — also a valid tool error, but a different message.
 E6. `xmind_move_topic` → move `alphaId` under one of its own descendants (e.g. `A1`). **Expect:** tool error (cannot move a topic into its own subtree).
 E7. Create the **error-scenario file** with `xmind_create_map` (single sheet). Then `xmind_delete_sheet` on its only sheet. **Expect:** tool error ("cannot delete the last sheet").
 

@@ -95,7 +95,8 @@ var toolGetSubtree = mcp.NewTool(
 	mcp.WithDescription(
 		"Return the topic hierarchy from a topic (or the sheet root). Each node includes id, title, labels, markers, "+
 			"and structureClass when the topic overrides sheet layout. Optional include_notes adds plain-text notes; "+
-			"include_links adds hyperlink href. Optional depth limits nesting; truncated branches report childrenCount.",
+			"include_links adds hyperlink href. Optional depth limits nesting; truncated branches report childrenCount. "+
+			"Floating (detached) and summary topics appear in children with childType \"detached\" or \"summary\"; attached children have no childType.",
 	),
 	withAnnotations("Get Subtree", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
@@ -126,7 +127,8 @@ var toolSearchTopics = mcp.NewTool(
 	mcp.WithDescription(
 		"Search topics by keyword (case-insensitive substring). "+
 			"Omit sheet_id to search all sheets; results will include sheetId and sheetTitle fields. "+
-			"Each match includes ancestryPath: titles from the sheet root down to (but not including) the matched topic, or null when the match is the sheet root.",
+			"Each match includes ancestryPath: titles from the sheet root down to (but not including) the matched topic, or null when the match is the sheet root. "+
+			"Each match has childType \"detached\" or \"summary\" when it is a floating or summary topic (omitted when attached).",
 	),
 	withAnnotations("Search Topics", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
@@ -143,7 +145,9 @@ var toolFindTopic = mcp.NewTool(
 			"Omit parent_id or null for the whole sheet. The scope root is visited first, so it can match if its title equals the search title; "+
 			"parentTitle and siblingTitles are relative to that walk, so they are empty when the match is the scope root. "+
 			"ancestryPath lists titles from the sheet root down to (but not including) the matched topic; it is always sheet-root-relative, not relative to parent_id scope, and is null when the match is the sheet root. "+
-			"Use xmind_search_topics for substring or cross-sheet search.",
+			"Use xmind_search_topics for substring or cross-sheet search. "+
+			"siblingTitles and childrenTitles include floating and summary topics; childType on the result is \"detached\" or \"summary\" when the found topic is one (omitted when attached). "+
+			"Use xmind_get_subtree to see each child's childType.",
 	),
 	withAnnotations("Find Topic", effectReadOnly),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),

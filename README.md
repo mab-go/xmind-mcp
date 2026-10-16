@@ -214,9 +214,9 @@ of the tree. Some write tools instead need sheet-level ids or ids from
 
 | Tool                         | Description                                                                                                                                                                                                        |
 |------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `xmind_get_subtree`          | Return the full topic hierarchy rooted at a given topic (or the whole sheet).                                                                                                                                      |
+| `xmind_get_subtree`          | Return the full topic hierarchy rooted at a given topic (or the whole sheet); floating and summary topics are marked with `childType`.                                                                             |
 | `xmind_get_topic_properties` | Return one topic's metadata as JSON (notes, markers, boundaries, sheet relationships for that topic, child counts); use to verify writes.                                                                          |
-| `xmind_search_topics`        | Search for topics by keyword; returns matches with IDs, ancestryPath (titles from sheet root to parent of match, or null at sheet root), parent title, depth, and sheet fields when searching all sheets.          |
+| `xmind_search_topics`        | Search topics by keyword; returns matches with IDs, ancestryPath (titles from sheet root to parent of match, or null at sheet root), parent title, depth, childType, and sheet fields when searching all sheets.   |
 | `xmind_find_topic`           | Find a single topic by exact title; returns ID, ancestryPath (sheet-root chain to parent of match; null at sheet root; not relative to parent_id scope), plus parent/sibling context relative to the search scope. |
 
 ### Tier 3: Topic Mutations
