@@ -31,7 +31,7 @@ cmd/
 internal/
   server/
     server.go             — MCP server setup and tool registration
-    server_test.go        — asserts server capabilities (no MCP logging), instructions, server/discover, lifecycle hook logging, and panic recovery
+    server_test.go        — asserts server capabilities (no MCP logging), server info, instructions, server/discover, lifecycle hook logging, and panic recovery
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints, and that whole-number parameters are declared as non-negative integers
     output_schema_test.go — asserts which tools declare an outputSchema and that their structured output matches it

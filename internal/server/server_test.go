@@ -11,6 +11,7 @@ import (
 
 	"github.com/mab-go/logging"
 	"github.com/mab-go/xmind-mcp/internal/server/handler"
+	"github.com/mab-go/xmind-mcp/internal/version"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -75,6 +76,7 @@ func TestInitializeReturnsInstructions(t *testing.T) {
 
 // TestDiscoverAdvertisesServer checks a 2026-07-28 client, which skips initialize, gets the
 // same server surface from server/discover: protocol versions, instructions, and capabilities.
+// The server info arrives in result._meta instead; TestServerInfo covers it.
 func TestDiscoverAdvertisesServer(t *testing.T) {
 	s := newXMindServer(context.Background(), handler.NewXMindHandler())
 
@@ -98,6 +100,47 @@ func TestDiscoverAdvertisesServer(t *testing.T) {
 	}
 	if _, ok := caps["logging"]; ok {
 		t.Errorf("capabilities = %v, want no logging entry", caps)
+	}
+}
+
+// TestServerInfo checks the server identifies itself with its name, version, title,
+// description, and website both in the initialize result's serverInfo and in the
+// server info a 2026-07-28 client gets in the server/discover result's _meta.
+func TestServerInfo(t *testing.T) {
+	s := newXMindServer(context.Background(), handler.NewXMindHandler())
+
+	for _, tc := range []struct {
+		name    string
+		request string
+		info    func(result map[string]any) any
+	}{
+		{"initialize", initializeRequest, func(result map[string]any) any {
+			return result["serverInfo"]
+		}},
+		{"server/discover", discoverRequest, func(result map[string]any) any {
+			meta, _ := result["_meta"].(map[string]any)
+			return meta[mcp.MetaKeyServerInfo]
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := handleJSON(t, s, tc.request)
+			result, _ := resp["result"].(map[string]any)
+			info, ok := tc.info(result).(map[string]any)
+			if !ok {
+				t.Fatalf("response has no server info: %v", resp)
+			}
+			for key, want := range map[string]string{
+				"name":        "xmind-mcp",
+				"version":     version.Version,
+				"title":       serverTitle,
+				"description": serverDescription,
+				"websiteUrl":  serverWebsiteURL,
+			} {
+				if got := info[key]; got != want {
+					t.Errorf("server info %s = %v, want %q", key, got, want)
+				}
+			}
+		})
 	}
 }
 

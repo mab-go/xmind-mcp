@@ -13,6 +13,17 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
+// Server metadata sent alongside the name and version in the initialize result's serverInfo
+// and in the server info that 2026-07-28 results carry in _meta. Clients show it in server lists.
+const (
+	// serverTitle is the human-readable display name.
+	serverTitle = "XMind MCP"
+	// serverDescription is a one-sentence summary of what the server does.
+	serverDescription = "An MCP server for reading and writing local XMind mind map files."
+	// serverWebsiteURL is the project's home page.
+	serverWebsiteURL = "https://github.com/mab-go/xmind-mcp"
+)
+
 func newXMindServer(ctx context.Context, h *handler.XMindHandler) *mcpserver.MCPServer {
 	log, _ := logging.FromContext(ctx)
 
@@ -25,6 +36,9 @@ func newXMindServer(ctx context.Context, h *handler.XMindHandler) *mcpserver.MCP
 	s := mcpserver.NewMCPServer(
 		"xmind-mcp",
 		version.Version,
+		mcpserver.WithTitle(serverTitle),
+		mcpserver.WithDescription(serverDescription),
+		mcpserver.WithWebsiteURL(serverWebsiteURL),
 		mcpserver.WithToolCapabilities(true),
 		mcpserver.WithInstructions(serverInstructions),
 		mcpserver.WithToolHandlerMiddleware(recoverToolPanics(log)),
