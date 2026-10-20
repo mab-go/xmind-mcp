@@ -37,7 +37,10 @@ For each category, here is **how** to verify -- not just what to check.
     - A new tool not registered in `internal/server/server.go`, or missing from `expectedAnnotations` in `internal/server/tools_test.go`
     - A new JSON key on a tree type missing from its allowlist in `internal/xmind/json_codec.go`, so it is kept as opaque data instead of populating the typed field
     - A new idempotent tool missing from `idempotentToolCases` in `internal/server/handler/mutate_test.go`; the idempotency tests skip it without failing
-    - A new or renamed tool missing from the Tools section of `README.md` or from the `xmind-mcp-smoke-test` skill, which also states the tool count
+    - A new or renamed tool missing from the Tools section of `README.md`, the `xmind-mcp-smoke-test` skill, or the example map in `cmd/gen-example` (all three state the tool count; regenerate the map with `make gen-example`)
+    - A tool whose handler returns `jsonResult` without `handler.OutputSchema[...]`, missing from `jsonOutputTools` in `internal/server/output_schema_test.go`, or without a `TestStructuredOutputMatchesSchema` case for each success path
+    - A whole-number parameter declared with `mcp.WithNumber` instead of `mcp.WithInteger(..., mcp.Min(0))`, or missing from `nonNegativeIntParams` in `internal/server/tools_test.go`
+    - A new, renamed, or removed tool, or a workflow change, that leaves `serverInstructions` in `internal/server/instructions.go` stale (it may name only registered tools and must stay within 150 words)
     - An import between `internal/xmind` and `internal/server/handler` (see Layer Dependencies in AGENTS.md)
 - **Invariants:** If the project's agent instructions declare invariants (things that must never happen), any step that would break one is a blocker. These are always blockers:
   - Editing a migration that has already been applied
