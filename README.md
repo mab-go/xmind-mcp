@@ -346,8 +346,8 @@ their descriptions say otherwise.
 | `xmind_add_topics_bulk`           | Add many topics (flat or nested); each object may set the same optional metadata fields; success body is JSON.                                          |
 | `xmind_duplicate_topic`           | Deep-clone a topic subtree under another parent (same sheet); sheet relationships are not copied; success body is JSON.                                 |
 | `xmind_rename_topic`              | Change the title of an existing topic.                                                                                                                  |
-| `xmind_delete_topic`              | Remove a topic and all its descendants.                                                                                                                 |
-| `xmind_move_topic`                | Move a topic (and subtree) to a new parent; optional `position` sets insertion order (omit to append); success body is JSON.                            |
+| `xmind_delete_topic`              | Remove a topic and all its descendants, plus any relationships connected to them; summary and boundary ranges on the parent shrink to match.            |
+| `xmind_move_topic`                | Move a topic (and subtree) to a new parent; optional `position` sets insertion order (omit to append); not for summary topics; success body is JSON.    |
 | `xmind_reorder_children`          | Change the order of a topic's children without reparenting.                                                                                             |
 | `xmind_set_topic_properties`      | Set or update topic metadata (notes, labels, markers, link, remove_markers); clearing rules are on the tool.                                            |
 | `xmind_set_topic_properties_bulk` | Apply the same metadata updates as `xmind_set_topic_properties` to many topic IDs in one read/write.                                                    |
