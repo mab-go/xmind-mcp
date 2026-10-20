@@ -98,8 +98,8 @@ Run the phases in order; later phases depend on structure built earlier. For eac
 40. `xmind_import_from_outline` → `outline="- Solo A\n- Solo B"`, omit `sheet_id` and `root_title`. Capture the new sheet id. **Assert:** result says `imported 3 topics` (the synthesized root counts); `xmind_get_subtree` on that sheet shows root `"Imported Outline"` with children exactly `[Solo A, Solo B]` (several top-level items become siblings under a synthesized root).
 41. `xmind_import_from_outline` → same outline, `root_title="Solos"`, omit `sheet_id`. Capture the new sheet id. **Assert:** result says `imported 3 topics`; the sheet and its root are both titled `"Solos"`; root children exactly `[Solo A, Solo B]`.
 42. `xmind_import_from_outline` → `outline="- Extra A\n- Extra B"`, `sheet_id=sheetMain`, `parent_id=rootId`. **Assert** via `xmind_get_subtree`: `Extra A` and `Extra B` now under root. The result text carries no ids, so capture `extraAId` and `extraBId` from this read-back (E5 needs them).
-43. `xmind_find_and_replace` → `sheet_id=sheetMain`, `find="Alpha"`, `replace="Alfa"`. **Assert** via `xmind_search_topics`: `Alfa` present, `Alpha` no longer matches.
-44. `xmind_find_and_replace` → omit `sheet_id` (all sheets), `find="Beta"`, `replace="Beta!"`, `exact_match=true`. **Assert** via `xmind_search_topics`: exact-titled `Beta` renamed.
+43. `xmind_find_and_replace` → `sheet_id=sheetMain`, `find="Alpha"`, `replace="Alfa"`. **Assert:** the result has `changedCount=1` and one `changes` entry with `id=alphaId`, `oldTitle="Alpha"`, `newTitle="Alfa"` (only Alpha matches on this sheet; the duplicate was deleted in step 30). **Assert** via `xmind_search_topics`: `Alfa` present, `Alpha` no longer matches.
+44. `xmind_find_and_replace` → omit `sheet_id` (all sheets), `find="Beta"`, `replace="Beta!"`, `exact_match=true`. **Assert:** the result has `changedCount=1` and one `changes` entry with `id=betaId`, `oldTitle="Beta"`, `newTitle="Beta!"`, `sheetId=sheetMain` (entries carry `sheetId` when more than one sheet is searched; the map has four sheets by now). **Assert** via `xmind_search_topics`: exact-titled `Beta` renamed.
 
 ### Phase 9 — Error paths (must return tool errors, not crashes)
 For each, PASS = a recoverable **tool error** with a readable message; FAIL = protocol error/crash, a misleading message, or unexpected success.
@@ -111,6 +111,7 @@ E4. `xmind_delete_topic` → `sheetMain`, `topic_id=rootId`. **Expect:** tool er
 E5. `xmind_reorder_children` → `rootId` with an `ordered_ids` list built from the root's **current attached** children, with one real id replaced by a fake id. Take the list from a fresh `xmind_get_subtree(sheetMain)`: use the root's children that have no `childType` (skip "Floater", which is `childType: "detached"`). At this point that is `[betaId, alphaId, extraAId, extraBId]`, so send e.g. `["fake-id", alphaId, extraAId, extraBId]`. **Expect:** tool error ("ordered_ids contains unknown id"). Note: the handler checks list length first, so a list of the *wrong length* instead returns a length-mismatch error — also a valid tool error, but a different message.
 E6. `xmind_move_topic` → move `alphaId` under one of its own descendants (e.g. `A1`). **Expect:** tool error (cannot move a topic into its own subtree).
 E7. Create the **error-scenario file** with `xmind_create_map` (single sheet). Then `xmind_delete_sheet` on its only sheet. **Expect:** tool error ("cannot delete the last sheet").
+E8. `xmind_add_summary` → `sheetMain`, parent `alphaId`, `from_index=0.5`, `to_index=1`. **Expect:** tool error ("invalid argument from_index: must be a whole number"). `from_index` is declared an integer, so a client that checks arguments against the schema may refuse to send the call. If it does, record PASS with the client's message and note that the server check was not reached.
 
 ## Cleanup
 
@@ -131,7 +132,7 @@ Produce a **per-tool PASS/FAIL report** suitable for release sign-off. Structure
    | ... | ... | ... |
 
    Every one of the 27 tools must appear. Mark any not reached as **NOT RUN** with the reason.
-3. **Error-path table** — E1–E7 with PASS/FAIL and the actual message returned.
+3. **Error-path table** — E1–E8 with PASS/FAIL and the actual message returned.
 4. **Final verdict:** `RELEASE OK` only if every tool ran and every assertion + error path passed. Otherwise `RELEASE BLOCKED` with the failing items listed first.
 
 State failures plainly with the exact tool call and the observed vs. expected result. Do not soften or omit a failure. If a step could not run because an earlier step failed, mark it BLOCKED and say which step blocked it.
