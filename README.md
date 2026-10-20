@@ -28,7 +28,9 @@ edit `.xmind` files directly on disk.
 
 ### Using
 
-- Any MCP-compatible client (Claude Desktop, Cursor, etc.)
+- Any MCP client that can start a local stdio server. See
+  [MCP Client Configuration](#mcp-client-configuration) for Claude Desktop,
+  Claude Code, VS Code and Cursor.
 
 ------------------------------------------------------------------------
 
@@ -112,10 +114,102 @@ Run interactively (stdio requires `-i`):
 docker run --rm -i -v /path/on/host:/maps xmind-mcp:test --version
 ```
 
-### MCP client configuration (Docker)
+To run the image from an MCP client, see
+[Running the Docker image](#running-the-docker-image).
 
-For Claude Desktop, run the published image via `docker` and pass mounts in
-`args` (adjust the host path). Example `claude_desktop_config.json`:
+------------------------------------------------------------------------
+
+## MCP Client Configuration
+
+xmind-mcp is a stdio server: the client starts the `xmind-mcp` binary and
+talks to it over standard input and output. The binary takes no arguments.
+
+### Command and map paths
+
+**Command.** `go install` puts the binary in `$(go env GOPATH)/bin`, usually
+`~/go/bin`. If that directory isn't on your `PATH`, use the full path to the
+binary as the command; `which xmind-mcp` prints it (`where xmind-mcp` on
+Windows). Do the same if a desktop app can't start the server even though the
+command works in a terminal: apps started from a dock or menu may not see your
+shell's `PATH`. In JSON on Windows, double each backslash, as in
+`"C:\\Users\\you\\go\\bin\\xmind-mcp.exe"`.
+
+**Map paths.** Every tool takes the path to a `.xmind` file. A relative path
+resolves against the server's working directory, which the client chooses and
+which is often not the folder you're working in (for Claude Desktop it may be
+`/`). Refer to maps by absolute path; the server tells the model the same.
+
+### Claude Code
+
+```bash
+claude mcp add --scope user xmind -- xmind-mcp
+```
+
+`--scope user` makes the server available in every project. Without it, the
+server is added for the current project only. `--scope project` instead writes
+a `.mcp.json` file in the project root to share with collaborators; it uses
+the same JSON as the [VS Code](#vs-code) example, and Claude Code asks each
+person to approve it before it connects. Check the server with
+`claude mcp list`, or with `/mcp` inside a session.
+
+### Claude Desktop
+
+Open the config file from the Claude menu with **Settings > Developer > Edit
+Config**, or edit it directly:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+Add the server under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "xmind": {
+      "command": "xmind-mcp"
+    }
+  }
+}
+```
+
+Then quit Claude Desktop completely and start it again, so it loads the new
+configuration.
+
+### VS Code
+
+Run **MCP: Add Server** from the Command Palette, choose **Command (stdio)**,
+enter `xmind-mcp`, and name the server `xmind`. Or add it by hand to
+`~/.copilot/mcp-config.json` (all workspaces) or to `.mcp.json` at the
+workspace root:
+
+```json
+{
+  "mcpServers": {
+    "xmind": {
+      "type": "stdio",
+      "command": "xmind-mcp"
+    }
+  }
+}
+```
+
+The older VS Code format, in `.vscode/mcp.json` or the user-profile
+`mcp.json`, still works. It uses a top-level `servers` key instead of
+`mcpServers`.
+
+### Cursor
+
+Add the same JSON as for [VS Code](#vs-code) to `~/.cursor/mcp.json` (all
+projects) or to `.cursor/mcp.json` in a project. Cursor loads a project's
+servers only after you approve them. Cursor's CLI shows whether the server
+connected: `agent mcp list`.
+
+### Running the Docker image
+
+To use the [Docker image](#docker) instead of a local binary, the client
+starts `docker`. For Claude Desktop, VS Code or Cursor, set `command` and
+`args`:
 
 ```json
 {
@@ -128,6 +222,8 @@ For Claude Desktop, run the published image via `docker` and pass mounts in
         "--rm",
         "-v",
         "/path/on/host:/maps",
+        "-w",
+        "/maps",
         "ghcr.io/mab-go/xmind-mcp:latest"
       ]
     }
@@ -135,35 +231,24 @@ For Claude Desktop, run the published image via `docker` and pass mounts in
 }
 ```
 
-------------------------------------------------------------------------
+For Claude Code:
 
-## MCP Client Configuration
-
-Add the following to your MCP client's configuration file. For Claude
-Desktop, that's `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "xmind": {
-      "command": "xmind-mcp"
-    }
-  }
-}
+```bash
+claude mcp add --scope user xmind -- docker run -i --rm \
+  -v /path/on/host:/maps -w /maps ghcr.io/mab-go/xmind-mcp:latest
 ```
 
-If you built from source or the binary is not on your `PATH`, use the
-full path to the binary:
+The server sees only the mounted directory, at its path inside the container:
+with `/home/you/maps` mounted at `/maps`, ask for `/maps/my-map.xmind`.
+`-w /maps` makes relative paths resolve inside the mount, since the image's
+working directory is `/`. To use host paths unchanged, mount the directory at
+the same path: `-v /home/you/maps:/home/you/maps`.
 
-```json
-{
-  "mcpServers": {
-    "xmind": {
-      "command": "/absolute/path/to/xmind-mcp"
-    }
-  }
-}
-```
+The container runs as root, so on a Linux host the maps it creates or saves
+become owned by root. To keep them yours, add `--user` with your user and
+group IDs (from `id -u` and `id -g`), for example `"--user", "1000:1000"` in
+`args`. `claude mcp add` runs in your shell, so `--user "$(id -u):$(id -g)"`
+works there.
 
 ### Log level
 
@@ -178,8 +263,8 @@ trace, whatever the log level.
 
 `debug` adds per-connection lifecycle detail: the client's name and MCP
 protocol version, logged at the `initialize` handshake or, for clients on
-protocol 2026-07-28, at `server/discover`. To enable it from a client config,
-set it via `env`:
+protocol 2026-07-28, at `server/discover`. To enable it from a JSON client
+config (Claude Desktop, VS Code or Cursor), set it via `env`:
 
 ```json
 {
@@ -191,6 +276,15 @@ set it via `env`:
   }
 }
 ```
+
+In Claude Code, pass the flag after the command:
+
+```bash
+claude mcp add --scope user xmind -- xmind-mcp --log-level debug
+```
+
+`claude mcp add -e XMIND_MCP_LOG_LEVEL=debug` also works, but the CLI rejects
+a server name placed directly after `-e`, so put the name first.
 
 ------------------------------------------------------------------------
 
