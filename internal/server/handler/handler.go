@@ -60,16 +60,6 @@ func countTopics(t *xmind.Topic) int {
 	return n
 }
 
-// cloneDanglingSummaryRefError signals that a cloned summary descriptor references a topicId
-// absent from the cloned subtree. The source map opened fine, so this is caller-fixable bad
-// input (duplicate a different topic, or point at a different file) — handlers surface it as a
-// tool error, not a protocol error.
-type cloneDanglingSummaryRefError struct{ topicID string }
-
-func (e *cloneDanglingSummaryRefError) Error() string {
-	return fmt.Sprintf("clone topic: summary topicId %q not found in cloned subtree", e.topicID)
-}
-
 // deepCloneTopic returns a deep copy of the topic subtree with JSON round-trip (preserves codec `extra`
 // data), then assigns fresh UUIDs to every topic and to summary/boundary descriptors within the clone.
 func deepCloneTopic(root *xmind.Topic) (xmind.Topic, error) {
@@ -84,15 +74,15 @@ func deepCloneTopic(root *xmind.Topic) (xmind.Topic, error) {
 	if err := json.Unmarshal(data, &clone); err != nil {
 		return xmind.Topic{}, fmt.Errorf("unmarshal topic: %w", err)
 	}
-	if err := remapClonedTopicIDs(&clone); err != nil {
-		return xmind.Topic{}, err
-	}
+	remapClonedTopicIDs(&clone)
 	return clone, nil
 }
 
 // remapClonedTopicIDs reassigns topic IDs and summary/boundary IDs after a JSON clone. Pass 1 fills
 // idMap; pass 2 updates Summary and Boundary records that reference topic IDs or need unique IDs.
-func remapClonedTopicIDs(root *xmind.Topic) error {
+// A summary descriptor whose topicId names no topic in the clone is left out of the copy; older
+// versions left such descriptors behind when a summary topic was deleted.
+func remapClonedTopicIDs(root *xmind.Topic) {
 	idMap := make(map[string]string)
 	walkTopics(root, 0, nil, func(t *xmind.Topic, _ int, _ *xmind.Topic) bool {
 		oldID := t.ID
@@ -101,27 +91,28 @@ func remapClonedTopicIDs(root *xmind.Topic) error {
 		t.ID = newID
 		return true
 	})
-	var remapErr error
 	walkTopics(root, 0, nil, func(t *xmind.Topic, _ int, _ *xmind.Topic) bool {
-		for i := range t.Summaries {
-			s := &t.Summaries[i]
-			oldTopicRef := s.TopicID
+		kept := t.Summaries[:0]
+		for _, s := range t.Summaries {
 			s.ID = uuid.New().String()
-			if oldTopicRef != "" {
-				newRef, ok := idMap[oldTopicRef]
+			if s.TopicID != "" {
+				newRef, ok := idMap[s.TopicID]
 				if !ok {
-					remapErr = &cloneDanglingSummaryRefError{topicID: oldTopicRef}
-					return false
+					continue
 				}
 				s.TopicID = newRef
 			}
+			kept = append(kept, s)
 		}
+		if len(kept) == 0 {
+			kept = nil
+		}
+		t.Summaries = kept
 		for i := range t.Boundaries {
 			t.Boundaries[i].ID = uuid.New().String()
 		}
 		return true
 	})
-	return remapErr
 }
 
 // findSheetByID returns the sheet with the given id, or nil if not found.
@@ -288,6 +279,16 @@ func isDescendantOf(ancestor *xmind.Topic, descendantID string) bool {
 	return !walkTopics(ancestor, 0, nil, func(t *xmind.Topic, _ int, _ *xmind.Topic) bool {
 		return t.ID != descendantID
 	})
+}
+
+// topicIDSet returns the IDs of root and every topic below it (attached, detached and summary).
+func topicIDSet(root *xmind.Topic) map[string]struct{} {
+	ids := make(map[string]struct{})
+	walkTopics(root, 0, nil, func(t *xmind.Topic, _ int, _ *xmind.Topic) bool {
+		ids[t.ID] = struct{}{}
+		return true
+	})
+	return ids
 }
 
 // absPathFromArgs resolves and absolutes args["path"]; returns a tool-level error result if invalid.

@@ -330,7 +330,8 @@ When a handler writes the map, call `jsonResult` before `mw.Commit` if the respo
 | `searchChildrenForParent(root, targetID)` | Depth-first: recurse into attached, detached, summary to find which child subtree contains `targetID`’s parent |
 | `isDescendantOf(ancestor, descendantID)` | Reports whether a node is the ancestor or any node in its subtree |
 | `countTopics(t)` | Total node count for a subtree (self + all descendants) |
-| `deepCloneTopic(root)` | JSON round-trip clone of a subtree, then fresh UUIDs for topics and summary/boundary descriptors |
+| `topicIDSet(root)` | Set of IDs of a subtree's topics (attached, detached, summary); compare sets from before and after a change to find removed topics |
+| `deepCloneTopic(root)` | JSON round-trip clone of a subtree, then fresh UUIDs for topics and summary/boundary descriptors; a summary descriptor whose `topicId` is missing from the subtree is left out of the copy |
 
 ### Logging
 
@@ -477,9 +478,17 @@ type Summary struct {
 }
 ```
 
+Removal is the same double-write in reverse: deleting a summary topic also removes its descriptor (`removeSummaryChild` in `mutate.go`). Summary topics cannot be moved; `xmind_move_topic` returns a tool error for one.
+
+### Ranges follow attached-child indices
+
+Summary ranges and boundary ranges (`Topic.Boundaries`, `"(from,to)"` like summaries) are indices into the parent's `Children.Attached`, so every insert into or removal from that list must shift them. Use `insertAttachedAdjustingRanges` and `removeAttachedChild` (both in `mutate.go`), which call `adjustRangesAfterAttachedInsert` / `adjustRangesAfterAttachedRemove`; never splice `Children.Attached` by hand except to append at the end, which cannot affect a range. A range that loses its last child is dropped, and a summary's summary topic goes with it. A boundary with range `"master"` (the whole parent) is never shifted. `xmind_reorder_children` leaves ranges on the same positions.
+
 ### Relationships live on the sheet, not on topics
 
 Relationships are stored in `Sheet.Relationships` — a top-level array on the sheet object. They are **not** stored on either of the connected topics. Writing a relationship to a topic will appear to work but the relationship will not render in XMind.
+
+Any change that removes topics must also remove the relationships connected to them. Take `topicIDSet(&sh.RootTopic)` before the change and pass it to `pruneRelationshipsToRemoved` (`mutate.go`) afterwards, as DeleteTopic and MoveTopic do; this also catches summary topics removed when their range collapses.
 
 ### Fields to never modify
 

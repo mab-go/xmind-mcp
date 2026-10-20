@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"html"
 	"math"
@@ -210,34 +209,56 @@ func applyAddSummary(parent *xmind.Topic, fromIdx, toIdx int, title string) stri
 	return summaryTopicID
 }
 
-// shiftSummaryRangesAfterRemove returns updated summary descriptors and topic IDs whose summary
-// children should be removed after deleting the attached child at removedIndex.
-func shiftSummaryRangesAfterRemove(summaries []xmind.Summary, removedIndex int) ([]xmind.Summary, map[string]struct{}) {
-	N := removedIndex
-	removeTopicIDs := make(map[string]struct{})
-	var newSummaries []xmind.Summary
-	for _, s := range summaries {
-		from, to, ok := parseSummaryRange(s.Range)
-		if !ok {
-			newSummaries = append(newSummaries, s)
-			continue
-		}
-		newFrom, newTo := from, to
-		if N >= newFrom && N <= newTo {
-			newTo--
-		} else if newFrom > N {
-			newFrom--
-			newTo--
-		}
-		if newFrom > newTo {
-			removeTopicIDs[s.TopicID] = struct{}{}
-			continue
-		}
-		s.Range = formatSummaryRange(newFrom, newTo)
-		newSummaries = append(newSummaries, s)
+// shiftRangeForInsert returns the range from..to after one attached child is inserted at idx.
+// A child inserted at or before from shifts the range, one inserted inside it extends the
+// range, and one inserted after to leaves it alone.
+func shiftRangeForInsert(from, to, idx int) (newFrom, newTo int) {
+	switch {
+	case idx > to:
+		return from, to
+	case idx <= from:
+		return from + 1, to + 1
+	default:
+		return from, to + 1
 	}
-	return newSummaries, removeTopicIDs
 }
+
+// shiftRangeForRemove returns the range from..to after the attached child at idx is removed.
+// keep is false when the range covered only that child.
+func shiftRangeForRemove(from, to, idx int) (newFrom, newTo int, keep bool) {
+	switch {
+	case idx < from:
+		from, to = from-1, to-1
+	case idx <= to:
+		to--
+	}
+	return from, to, from <= to
+}
+
+// shiftRanges applies shift to the "(from,to)" range of each item and returns the items that
+// still have a range and those whose range became empty. Items whose range does not parse, such
+// as a boundary's "master", are kept unchanged.
+func shiftRanges[T any](items []T, rangeOf func(*T) *string, shift func(from, to int) (int, int, bool)) (kept, dropped []T) {
+	for _, item := range items {
+		r := rangeOf(&item)
+		from, to, ok := parseSummaryRange(*r)
+		if !ok {
+			kept = append(kept, item)
+			continue
+		}
+		from, to, keep := shift(from, to)
+		if !keep {
+			dropped = append(dropped, item)
+			continue
+		}
+		*r = formatSummaryRange(from, to)
+		kept = append(kept, item)
+	}
+	return kept, dropped
+}
+
+func summaryRange(s *xmind.Summary) *string   { return &s.Range }
+func boundaryRange(b *xmind.Boundary) *string { return &b.Range }
 
 func filterSummaryChildren(summaryChildren []xmind.Topic, removeIDs map[string]struct{}) []xmind.Topic {
 	if len(removeIDs) == 0 {
@@ -252,19 +273,20 @@ func filterSummaryChildren(summaryChildren []xmind.Topic, removeIDs map[string]s
 	return kept
 }
 
-// adjustSummariesAfterAttachedRemove updates parent.Summaries and Children.Summary after
-// removing the attached child at removedIndex.
-func adjustSummariesAfterAttachedRemove(parent *xmind.Topic, removedIndex int) {
-	if parent == nil || parent.Children == nil {
+// adjustRangesAfterAttachedRemove shifts the parent's summary and boundary ranges after the
+// attached child at idx is removed. A summary whose range becomes empty is dropped along with its
+// summary topic, and a boundary whose range becomes empty is dropped.
+func adjustRangesAfterAttachedRemove(parent *xmind.Topic, idx int) {
+	shift := func(from, to int) (int, int, bool) { return shiftRangeForRemove(from, to, idx) }
+	var droppedSummaries []xmind.Summary
+	parent.Summaries, droppedSummaries = shiftRanges(parent.Summaries, summaryRange, shift)
+	parent.Boundaries, _ = shiftRanges(parent.Boundaries, boundaryRange, shift)
+	if len(droppedSummaries) == 0 || parent.Children == nil {
 		return
 	}
-	newSummaries, removeTopicIDs := shiftSummaryRangesAfterRemove(parent.Summaries, removedIndex)
-	parent.Summaries = newSummaries
-	if len(parent.Summaries) == 0 {
-		parent.Summaries = nil
-	}
-	if len(removeTopicIDs) == 0 {
-		return
+	removeTopicIDs := make(map[string]struct{}, len(droppedSummaries))
+	for _, s := range droppedSummaries {
+		removeTopicIDs[s.TopicID] = struct{}{}
 	}
 	parent.Children.Summary = filterSummaryChildren(parent.Children.Summary, removeTopicIDs)
 	if len(parent.Children.Summary) == 0 {
@@ -272,37 +294,15 @@ func adjustSummariesAfterAttachedRemove(parent *xmind.Topic, removedIndex int) {
 	}
 }
 
-// adjustSummariesAfterAttachedInsert shifts summary ranges after inserting one attached child at insertIndex.
-func adjustSummariesAfterAttachedInsert(parent *xmind.Topic, insertIndex int) {
-	if parent == nil || len(parent.Summaries) == 0 {
-		return
+// adjustRangesAfterAttachedInsert shifts the parent's summary and boundary ranges after one
+// attached child is inserted at idx.
+func adjustRangesAfterAttachedInsert(parent *xmind.Topic, idx int) {
+	shift := func(from, to int) (int, int, bool) {
+		from, to = shiftRangeForInsert(from, to, idx)
+		return from, to, true
 	}
-	P := insertIndex
-	newSummaries := make([]xmind.Summary, 0, len(parent.Summaries))
-	for _, s := range parent.Summaries {
-		from, to, ok := parseSummaryRange(s.Range)
-		if !ok {
-			newSummaries = append(newSummaries, s)
-			continue
-		}
-		newFrom, newTo := from, to
-		switch {
-		case P > newTo:
-			// insert after this range
-		case P <= newFrom:
-			newFrom++
-			newTo++
-		default:
-			// from < P <= to
-			newTo++
-		}
-		s.Range = formatSummaryRange(newFrom, newTo)
-		newSummaries = append(newSummaries, s)
-	}
-	parent.Summaries = newSummaries
-	if len(parent.Summaries) == 0 {
-		parent.Summaries = nil
-	}
+	parent.Summaries, _ = shiftRanges(parent.Summaries, summaryRange, shift)
+	parent.Boundaries, _ = shiftRanges(parent.Boundaries, boundaryRange, shift)
 }
 
 func childrenFullyEmpty(c *xmind.Children) bool {
@@ -371,9 +371,9 @@ func insertAttached(parent *xmind.Topic, topic xmind.Topic, pos *int) *mcp.CallT
 	return nil
 }
 
-// insertAttachedWithSummaryAdjust runs insertAttached, derives the insert index, and adjusts
-// existing summary ranges when the parent has summaries.
-func insertAttachedWithSummaryAdjust(parent *xmind.Topic, topic xmind.Topic, pos *int) (insertIdx int, toolErr *mcp.CallToolResult) {
+// insertAttachedAdjustingRanges runs insertAttached, derives the insert index, and shifts the
+// parent's summary and boundary ranges to match.
+func insertAttachedAdjustingRanges(parent *xmind.Topic, topic xmind.Topic, pos *int) (insertIdx int, toolErr *mcp.CallToolResult) {
 	if terr := insertAttached(parent, topic, pos); terr != nil {
 		return 0, terr
 	}
@@ -382,9 +382,7 @@ func insertAttachedWithSummaryAdjust(parent *xmind.Topic, topic xmind.Topic, pos
 	} else {
 		insertIdx = *pos
 	}
-	if len(parent.Summaries) > 0 {
-		adjustSummariesAfterAttachedInsert(parent, insertIdx)
-	}
+	adjustRangesAfterAttachedInsert(parent, insertIdx)
 	return insertIdx, nil
 }
 
@@ -397,7 +395,7 @@ func removeAttachedChild(parent *xmind.Topic, idx int) (*xmind.Topic, *mcp.CallT
 	if len(parent.Children.Attached) == 0 {
 		parent.Children.Attached = nil
 	}
-	adjustSummariesAfterAttachedRemove(parent, idx)
+	adjustRangesAfterAttachedRemove(parent, idx)
 	nilEmptyChildren(parent)
 	return &removed, nil
 }
@@ -415,6 +413,8 @@ func removeDetachedChild(parent *xmind.Topic, idx int) (*xmind.Topic, *mcp.CallT
 	return &removed, nil
 }
 
+// removeSummaryChild removes the summary topic at idx and its range descriptor, the other half of
+// the summary double-write.
 func removeSummaryChild(parent *xmind.Topic, idx int) (*xmind.Topic, *mcp.CallToolResult) {
 	if idx < 0 || idx >= len(parent.Children.Summary) {
 		return nil, mcp.NewToolResultError("internal error: summary child index out of range")
@@ -423,6 +423,10 @@ func removeSummaryChild(parent *xmind.Topic, idx int) (*xmind.Topic, *mcp.CallTo
 	parent.Children.Summary = slices.Delete(parent.Children.Summary, idx, idx+1)
 	if len(parent.Children.Summary) == 0 {
 		parent.Children.Summary = nil
+	}
+	parent.Summaries = slices.DeleteFunc(parent.Summaries, func(s xmind.Summary) bool { return s.TopicID == removed.ID })
+	if len(parent.Summaries) == 0 {
+		parent.Summaries = nil
 	}
 	nilEmptyChildren(parent)
 	return &removed, nil
@@ -478,7 +482,7 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 	if toolResult := applyTopicPropertiesArgs(args, &topic); toolResult != nil {
 		return toolResult, nil
 	}
-	insertIdx, terr := insertAttachedWithSummaryAdjust(parent, topic, pos)
+	insertIdx, terr := insertAttachedAdjustingRanges(parent, topic, pos)
 	if terr != nil {
 		return terr, nil
 	}
@@ -491,16 +495,6 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 		Position:     insertIdx,
 		SiblingCount: len(parent.Children.Attached),
 	})
-}
-
-// duplicateCloneFailure maps a deepCloneTopic error to the right MCP failure shape: a tool error
-// for a caller-fixable dangling summary reference (the source map opened fine), a protocol error
-// otherwise (nil root / JSON round-trip failures are genuine internal faults).
-func duplicateCloneFailure(err error) (*mcp.CallToolResult, error) {
-	if dangErr, ok := errors.AsType[*cloneDanglingSummaryRefError](err); ok {
-		return mcp.NewToolResultError(dangErr.Error()), nil
-	}
-	return nil, fmt.Errorf("duplicate topic: %w", err)
 }
 
 // DuplicateTopic deep-clones a topic subtree and attaches it as an attached child of target_parent_id.
@@ -536,12 +530,12 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 
 	clone, err := deepCloneTopic(source)
 	if err != nil {
-		return duplicateCloneFailure(err)
+		return nil, fmt.Errorf("duplicate topic: %w", err)
 	}
 	newRootID := clone.ID
 	n := countTopics(&clone)
 
-	insertIdx, terr := insertAttachedWithSummaryAdjust(targetParent, clone, pos)
+	insertIdx, terr := insertAttachedAdjustingRanges(targetParent, clone, pos)
 	if terr != nil {
 		return terr, nil
 	}
@@ -670,6 +664,26 @@ func deleteNonRootTopic(sh *xmind.Sheet, topicID string) *mcp.CallToolResult {
 	return rerr
 }
 
+// pruneRelationshipsToRemoved drops the sheet's relationships that have an endpoint in before
+// that is no longer in the sheet, and returns how many it dropped. A relationship whose endpoint
+// was already missing before the change is left alone.
+func pruneRelationshipsToRemoved(sh *xmind.Sheet, before map[string]struct{}) int {
+	after := topicIDSet(&sh.RootTopic)
+	removed := func(id string) bool {
+		_, was := before[id]
+		_, is := after[id]
+		return was && !is
+	}
+	n := len(sh.Relationships)
+	sh.Relationships = slices.DeleteFunc(sh.Relationships, func(r xmind.Relationship) bool {
+		return removed(r.End1ID) || removed(r.End2ID)
+	})
+	if len(sh.Relationships) == 0 {
+		sh.Relationships = nil
+	}
+	return n - len(sh.Relationships)
+}
+
 // DeleteTopic removes a topic and its subtree (not the sheet root).
 func (h *XMindHandler) DeleteTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	_ = ctx
@@ -699,19 +713,24 @@ func (h *XMindHandler) DeleteTopic(ctx context.Context, req mcp.CallToolRequest)
 	if sh == nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
 	}
+	before := topicIDSet(&sh.RootTopic)
 	if rerr := deleteNonRootTopic(sh, topicID); rerr != nil {
 		return rerr, nil
 	}
+	pruned := pruneRelationshipsToRemoved(sh, before)
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
 		return nil, fmt.Errorf("write map: %w", err)
 	}
-	return textResult(fmt.Sprintf("deleted topic %s", topicID)), nil
+	return textResult(fmt.Sprintf("deleted topic %s; removed %d relationship(s)", topicID, pruned)), nil
 }
 
 func validateMoveTopicPreconditions(sh *xmind.Sheet, topicID, newParentID string, topic *xmind.Topic) *mcp.CallToolResult {
 	if topicID == sh.RootTopic.ID {
 		return mcp.NewToolResultError("cannot move the root topic")
+	}
+	if _, _, list := findParentOfTopic(&sh.RootTopic, topicID); list == "summary" {
+		return mcp.NewToolResultError("cannot move a summary topic; delete it and add a new summary with xmind_add_summary")
 	}
 	if isDescendantOf(topic, newParentID) {
 		return mcp.NewToolResultError("cannot move a topic into its own subtree")
@@ -751,16 +770,9 @@ func attachDetachedToParent(root *xmind.Topic, newParentID string, removed *xmin
 	if newParent == nil {
 		return 0, 0, mcp.NewToolResultError(fmt.Sprintf("new parent topic not found after remove: %s", newParentID))
 	}
-	if terr := insertAttached(newParent, *removed, pos); terr != nil {
+	insertIdx, terr := insertAttachedAdjustingRanges(newParent, *removed, pos)
+	if terr != nil {
 		return 0, 0, terr
-	}
-	if pos == nil {
-		insertIdx = len(newParent.Children.Attached) - 1
-	} else {
-		insertIdx = *pos
-	}
-	if len(newParent.Summaries) > 0 {
-		adjustSummariesAfterAttachedInsert(newParent, insertIdx)
 	}
 	return insertIdx, len(newParent.Children.Attached), nil
 }
@@ -812,6 +824,9 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 		return jsonResult(MoveTopicResponse{TopicID: topicID, ParentID: newParentID, Position: idx, SiblingCount: n})
 	}
 
+	// Moving the last child out of a summary range removes that summary topic, so relationships
+	// to it are pruned as on delete.
+	before := topicIDSet(&sh.RootTopic)
 	removed, rerr := detachTopicFromTree(&sh.RootTopic, topicID)
 	if rerr != nil {
 		return rerr, nil
@@ -821,6 +836,7 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 	if aerr != nil {
 		return aerr, nil
 	}
+	pruneRelationshipsToRemoved(sh, before)
 
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {

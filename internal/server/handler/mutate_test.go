@@ -896,6 +896,9 @@ func TestDeleteTopic(t *testing.T) {
 	if res.IsError {
 		t.Fatal(textContent(t, res))
 	}
+	if got, want := textContent(t, res), fmt.Sprintf("deleted topic %s; removed 0 relationship(s)", tid); got != want {
+		t.Errorf("reply = %q, want %q", got, want)
+	}
 	sheets, _ = xmind.ReadMap(path)
 	if findTopicByID(&sheets[0].RootTopic, tid) != nil {
 		t.Fatal("topic still present")
@@ -2529,26 +2532,43 @@ func TestDuplicateTopicErrors(t *testing.T) {
 	}
 }
 
-// TestDuplicateTopicDanglingSummaryRefReturnsToolError reproduces issue #46: duplicating a
-// topic whose summary descriptor references a topicId absent from its subtree must surface as
-// a tool-level error (nil Go error, IsError result), not a protocol error. The handler is
-// invoked directly because callTool would t.Fatalf on the pre-fix protocol error.
-func TestDuplicateTopicDanglingSummaryRefReturnsToolError(t *testing.T) {
+// TestDuplicateTopicDropsOrphanedSummaryRange duplicates a topic carrying a summary range whose
+// topicId is missing from its subtree, as older versions left behind when a summary topic was
+// deleted. The copy leaves that range out instead of failing, a valid summary next to it is still
+// copied, and the original is untouched.
+func TestDuplicateTopicDropsOrphanedSummaryRange(t *testing.T) {
 	h := NewXMindHandler()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "dangling.xmind")
-	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	path := filepath.Join(t.TempDir(), "orphan.xmind")
+	sid, rootID, mid, validSumTopicID := writeOrphanedSummaryMap(t, h, path)
 
+	dup := parseDuplicateTopicResult(t, callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": mid, "target_parent_id": rootID,
+	}))
+
+	root := readFirstRoot(t, path)
+	cp := findTopicByID(root, dup.NewRootID)
+	if cp == nil || len(cp.Summaries) != 1 || cp.Children == nil || len(cp.Children.Summary) != 1 {
+		t.Fatalf("copy should keep only the valid summary, got %+v", cp)
+	}
+	if got := cp.Summaries[0].TopicID; got != cp.Children.Summary[0].ID || got == validSumTopicID {
+		t.Errorf("copied summary topicId = %q, want the copy's new summary topic id %q", got, cp.Children.Summary[0].ID)
+	}
+	if orig := findTopicByID(root, mid); orig == nil || len(orig.Summaries) != 2 {
+		t.Errorf("original summaries changed: %+v", orig)
+	}
+}
+
+// writeOrphanedSummaryMap creates a map at path whose root has one child, Mid, carrying two
+// summary ranges over its child Leaf: one whose topicId names no topic, and a valid one.
+func writeOrphanedSummaryMap(t *testing.T, h *XMindHandler, path string) (sheetID, rootID, midID, validSumTopicID string) {
+	t.Helper()
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
 	sheets, err := xmind.ReadMap(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sid := sheets[0].ID
-	rootID := sheets[0].RootTopic.ID
-
-	// Attach a child to duplicate that carries a summary descriptor whose topicId points at
-	// an id present nowhere in its subtree, then persist the malformed-but-openable map.
 	mid := uuid.New().String()
+	validSumTopicID = uuid.New().String()
 	sheets[0].RootTopic.Children = &xmind.Children{
 		Attached: []xmind.Topic{
 			{
@@ -2556,9 +2576,11 @@ func TestDuplicateTopicDanglingSummaryRefReturnsToolError(t *testing.T) {
 				Title: "Mid",
 				Summaries: []xmind.Summary{
 					{ID: uuid.New().String(), Range: "(0,0)", TopicID: "ghost-id"},
+					{ID: uuid.New().String(), Range: "(0,0)", TopicID: validSumTopicID},
 				},
 				Children: &xmind.Children{
 					Attached: []xmind.Topic{{ID: uuid.New().String(), Title: "Leaf"}},
+					Summary:  []xmind.Topic{{ID: validSumTopicID, Title: "S"}},
 				},
 			},
 		},
@@ -2566,45 +2588,7 @@ func TestDuplicateTopicDanglingSummaryRefReturnsToolError(t *testing.T) {
 	if err := xmind.WriteMap(path, sheets); err != nil {
 		t.Fatal(err)
 	}
-
-	req := mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{
-		"path": path, "sheet_id": sid, "topic_id": mid, "target_parent_id": rootID,
-	}}}
-	res, err := h.DuplicateTopic(context.Background(), req)
-	if err != nil {
-		t.Fatalf("expected a tool error (nil Go error), got protocol error: %v", err)
-	}
-	if res == nil || !res.IsError {
-		t.Fatalf("expected tool-level error result, got %+v", res)
-	}
-	if msg := textContent(t, res); !strings.Contains(msg, "not found in cloned subtree") {
-		t.Fatalf("unexpected error message: %q", msg)
-	}
-}
-
-// TestDuplicateCloneFailure covers both classification branches: a dangling summary reference is
-// caller-fixable (tool error, nil Go error), while any other clone failure is a genuine internal
-// fault (protocol error). The protocol-error path is unreachable via DuplicateTopic with normal
-// input, so it is exercised here directly.
-func TestDuplicateCloneFailure(t *testing.T) {
-	res, err := duplicateCloneFailure(&cloneDanglingSummaryRefError{topicID: "ghost-id"})
-	if err != nil {
-		t.Fatalf("dangling ref: expected nil Go error, got %v", err)
-	}
-	if res == nil || !res.IsError {
-		t.Fatalf("dangling ref: expected tool error result, got %+v", res)
-	}
-	if msg := textContent(t, res); !strings.Contains(msg, "ghost-id") {
-		t.Fatalf("dangling ref: unexpected message %q", msg)
-	}
-
-	res, err = duplicateCloneFailure(fmt.Errorf("boom"))
-	if res != nil {
-		t.Fatalf("internal fault: expected nil result, got %+v", res)
-	}
-	if err == nil || !strings.Contains(err.Error(), "duplicate topic:") {
-		t.Fatalf("internal fault: expected wrapped protocol error, got %v", err)
-	}
+	return sheets[0].ID, sheets[0].RootTopic.ID, mid, validSumTopicID
 }
 
 func TestParseSummaryRange(t *testing.T) {
@@ -2907,5 +2891,491 @@ func TestMoveTopicSamePlaceKeepsSummary(t *testing.T) {
 	root = &sheets[0].RootTopic
 	if len(root.Summaries) != 1 || root.Summaries[0].Range != "(0,2)" || len(root.Children.Summary) != 1 {
 		t.Fatalf("summary changed: summaries=%+v summaryTopics=%d", root.Summaries, len(root.Children.Summary))
+	}
+}
+
+// Topics and relationships on kitchen-sink "Sheet 12 - Relationships" used by the summary,
+// range and relationship integrity tests below.
+const (
+	kitchenSinkRelRootID             = "f3cf397d-d5df-4f3a-9136-4a5f97bca1d1"
+	kitchenSinkRelMainTopic2ID       = "8e7bbcf3-0fc2-44d4-8aca-bd3d45d8f743" // ancestor of kitchenSinkRelSubtopic1bID
+	kitchenSinkRelSubtopic1bID       = "468fa9d8-47b1-4b81-879f-9e1e02963ed5" // end1 of kitchenSinkRelPlainID
+	kitchenSinkRelSubtopic1aID       = "374b38f2-55e5-4619-9ed4-ea3be23d2c54" // end2 of kitchenSinkRelLabelledID
+	kitchenSinkRelMainTopic5ID       = "11bb41c5-b02e-400c-bad9-eabe0bc7f1b8" // parent of kitchenSinkRelSummaryOfLettersID
+	kitchenSinkRelSummaryOfLettersID = "6a973ddc-5b28-44f5-8e80-46793541efc2"
+	kitchenSinkRelFloating2ID        = "37c51b56-07e5-46ab-bc2b-ff008b875902"
+	kitchenSinkRelFloating2ChildID   = "726bce28-d1dd-435e-bb4e-bd1b73c51cff"
+	kitchenSinkRelPlainID            = "de0d5e7e-7126-4fed-b7db-2c95bf9dde71"
+	kitchenSinkRelLabelledID         = "ac81423b-bee9-42cf-9f9d-2e10f327a9a3"
+)
+
+func readFirstRoot(t *testing.T, path string) *xmind.Topic {
+	t.Helper()
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &sheets[0].RootTopic
+}
+
+// addSummaryViaTool adds a summary over parentID's attached children from..to and returns the
+// new summary topic's ID.
+func addSummaryViaTool(t *testing.T, h *XMindHandler, path, sheetID, parentID string, from, to int) string {
+	t.Helper()
+	res := callTool(t, h.AddSummary, map[string]any{
+		"path": path, "sheet_id": sheetID, "parent_id": parentID,
+		"from_index": float64(from), "to_index": float64(to),
+	})
+	requireToolOK(t, "add summary", res)
+	id, ok := strings.CutPrefix(textContent(t, res), "added summary topic id ")
+	if !ok {
+		t.Fatalf("unexpected add summary reply %q", textContent(t, res))
+	}
+	return id
+}
+
+func addRelationshipViaTool(t *testing.T, h *XMindHandler, path, sheetID, fromID, toID string) {
+	t.Helper()
+	res := callTool(t, h.AddRelationship, map[string]any{
+		"path": path, "sheet_id": sheetID, "from_id": fromID, "to_id": toID,
+	})
+	requireToolOK(t, "add relationship", res)
+}
+
+// TestDeleteSummaryTopicRemovesDescriptor checks that deleting a summary topic also removes its
+// range descriptor, so the parent is not left with a summary that points at nothing.
+func TestDeleteSummaryTopicRemovesDescriptor(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, rootID, _ := newABCMap(t, h)
+	sumID := addSummaryViaTool(t, h, path, sheetID, rootID, 0, 2)
+
+	requireToolOK(t, "delete summary topic", callTool(t, h.DeleteTopic, map[string]any{
+		"path": path, "sheet_id": sheetID, "topic_id": sumID,
+	}))
+
+	root := readFirstRoot(t, path)
+	if len(root.Summaries) != 0 {
+		t.Errorf("summary descriptors left behind: %+v", root.Summaries)
+	}
+	if root.Children == nil || len(root.Children.Summary) != 0 || len(root.Children.Attached) != 3 {
+		t.Errorf("want 3 attached children and no summary topics, got %+v", root.Children)
+	}
+}
+
+// TestDeleteSummaryTopicThenDuplicateParent deletes a summary topic from the fixture and then
+// duplicates its parent, which fails if the deleted topic's range was left behind.
+func TestDeleteSummaryTopicThenDuplicateParent(t *testing.T) {
+	h := NewXMindHandler()
+	path := copyFixture(t, kitchenSinkPath(t))
+	sid := kitchenSinkRelationshipsSheetID
+
+	requireToolOK(t, "delete summary topic", callTool(t, h.DeleteTopic, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": kitchenSinkRelSummaryOfLettersID,
+	}))
+	parseDuplicateTopicResult(t, callTool(t, h.DuplicateTopic, map[string]any{
+		"path": path, "sheet_id": sid, "topic_id": kitchenSinkRelMainTopic5ID, "target_parent_id": kitchenSinkRelRootID,
+	}))
+}
+
+// TestMoveTopicRejectsSummaryTopic checks that a summary topic cannot be moved: it belongs to its
+// range on the parent, and moving it would leave that range pointing at nothing.
+func TestMoveTopicRejectsSummaryTopic(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, rootID, ids := newABCMap(t, h)
+	sumID := addSummaryViaTool(t, h, path, sheetID, rootID, 0, 2)
+	before := readFileBytes(t, path)
+
+	res := callTool(t, h.MoveTopic, map[string]any{
+		"path": path, "sheet_id": sheetID, "topic_id": sumID, "new_parent_id": ids[0],
+	})
+	if !res.IsError || !strings.Contains(textContent(t, res), "cannot move a summary topic") {
+		t.Fatalf("want a summary-topic move error, got %q", textContent(t, res))
+	}
+	if !bytes.Equal(before, readFileBytes(t, path)) {
+		t.Error("rejected move rewrote the file")
+	}
+}
+
+// TestMoveTopicSameParentMaxPosition pins the position range for a move within the same parent:
+// the topic is detached before it is inserted, so the last valid position is the child count
+// minus one.
+func TestMoveTopicSameParentMaxPosition(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, rootID, ids := newABCMap(t, h)
+	before := readFileBytes(t, path)
+
+	res := callTool(t, h.MoveTopic, map[string]any{
+		"path": path, "sheet_id": sheetID, "topic_id": ids[0], "new_parent_id": rootID, "position": float64(3),
+	})
+	if !res.IsError || !strings.Contains(textContent(t, res), "out of range") {
+		t.Fatalf("position 3 of 3: want out of range, got %q", textContent(t, res))
+	}
+	if !bytes.Equal(before, readFileBytes(t, path)) {
+		t.Error("failed move rewrote the file")
+	}
+
+	res = callTool(t, h.MoveTopic, map[string]any{
+		"path": path, "sheet_id": sheetID, "topic_id": ids[0], "new_parent_id": rootID, "position": float64(2),
+	})
+	assertMoveResponseBasic(t, parseMoveTopicResult(t, res), ids[0], rootID, 2, 3)
+	if got := topicTitles(readFirstRoot(t, path).Children.Attached); strings.Join(got, ",") != "B,C,A" {
+		t.Errorf("order after move = %v, want [B C A]", got)
+	}
+}
+
+const (
+	rangeFixtureBoundaryID = "ranged-boundary"
+	rangeFixtureMasterID   = "master-boundary"
+)
+
+// rangeFixture is a map whose root has attached children A, B, C and D, with X under A.
+type rangeFixture struct {
+	path, sheetID, rootID string
+	ids                   map[string]string // title -> topic ID
+}
+
+// setupRangedBoundary builds a rangeFixture whose root has a boundary over rng, a master
+// boundary that must never change, and, when withSummary is set, a summary over the same rng.
+func setupRangedBoundary(t *testing.T, h *XMindHandler, rng string, withSummary bool) rangeFixture {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ranges.xmind")
+	requireToolOK(t, "create map", callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"}))
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := rangeFixture{path: path, sheetID: sheets[0].ID, rootID: sheets[0].RootTopic.ID, ids: map[string]string{}}
+	add := func(parentID, title string) {
+		res := callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": f.sheetID, "parent_id": parentID, "title": title})
+		f.ids[title] = parseAddTopicResult(t, res).ID
+	}
+	for _, title := range []string{"A", "B", "C", "D"} {
+		add(f.rootID, title)
+	}
+	add(f.ids["A"], "X")
+
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := &sheets[0].RootTopic
+	root.Boundaries = []xmind.Boundary{{ID: rangeFixtureBoundaryID, Range: rng}, {ID: rangeFixtureMasterID, Range: "master"}}
+	if withSummary {
+		sumTopicID := uuid.New().String()
+		root.Summaries = []xmind.Summary{{ID: uuid.New().String(), Range: rng, TopicID: sumTopicID}}
+		root.Children.Summary = []xmind.Topic{{ID: sumTopicID, Title: "S"}}
+	}
+	if err := xmind.WriteMap(path, sheets); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// rangeFixtureBoundaries returns the range of the fixture's ranged boundary ("" if it is gone)
+// and whether its master boundary is still "master".
+func rangeFixtureBoundaries(root *xmind.Topic) (ranged string, master bool) {
+	for _, b := range root.Boundaries {
+		switch b.ID {
+		case rangeFixtureBoundaryID:
+			ranged = b.Range
+		case rangeFixtureMasterID:
+			master = b.Range == "master"
+		}
+	}
+	return ranged, master
+}
+
+// assertRootRanges checks the root's ranged boundary and, when withSummary is set, its summary
+// against want ("" means the range was dropped), and that the master boundary is unchanged.
+func assertRootRanges(t *testing.T, f rangeFixture, want string, withSummary bool) {
+	t.Helper()
+	root := readFirstRoot(t, f.path)
+	gotBoundary, master := rangeFixtureBoundaries(root)
+	if !master {
+		t.Errorf("master boundary changed or lost: %+v", root.Boundaries)
+	}
+	if gotBoundary != want {
+		t.Errorf("boundary range = %q, want %q", gotBoundary, want)
+	}
+	if !withSummary {
+		return
+	}
+	var gotSummary string
+	switch len(root.Summaries) {
+	case 0:
+	case 1:
+		gotSummary = root.Summaries[0].Range
+	default:
+		t.Fatalf("want at most one summary, got %+v", root.Summaries)
+	}
+	if gotSummary != want {
+		t.Errorf("summary range = %q, want %q", gotSummary, want)
+	}
+	hasSummaryTopic := root.Children != nil && len(root.Children.Summary) == 1
+	if hasSummaryTopic != (want != "") {
+		t.Errorf("summary topic present = %v, want %v", hasSummaryTopic, want != "")
+	}
+}
+
+type rangeOp func(t *testing.T, h *XMindHandler, f rangeFixture) *mcp.CallToolResult
+
+// addRangeTopic adds a topic under the root; pos nil appends.
+func addRangeTopic(pos any) rangeOp {
+	return func(t *testing.T, h *XMindHandler, f rangeFixture) *mcp.CallToolResult {
+		args := map[string]any{"path": f.path, "sheet_id": f.sheetID, "parent_id": f.rootID, "title": "N"}
+		if pos != nil {
+			args["position"] = pos
+		}
+		return callTool(t, h.AddTopic, args)
+	}
+}
+
+func duplicateRangeTopic(title string, pos float64) rangeOp {
+	return func(t *testing.T, h *XMindHandler, f rangeFixture) *mcp.CallToolResult {
+		return callTool(t, h.DuplicateTopic, map[string]any{
+			"path": f.path, "sheet_id": f.sheetID, "topic_id": f.ids[title], "target_parent_id": f.rootID, "position": pos,
+		})
+	}
+}
+
+// moveRangeTopic moves title under newParentTitle ("" is the root); pos nil appends.
+func moveRangeTopic(title, newParentTitle string, pos any) rangeOp {
+	return func(t *testing.T, h *XMindHandler, f rangeFixture) *mcp.CallToolResult {
+		parentID := f.rootID
+		if newParentTitle != "" {
+			parentID = f.ids[newParentTitle]
+		}
+		args := map[string]any{"path": f.path, "sheet_id": f.sheetID, "topic_id": f.ids[title], "new_parent_id": parentID}
+		if pos != nil {
+			args["position"] = pos
+		}
+		return callTool(t, h.MoveTopic, args)
+	}
+}
+
+func deleteRangeTopic(title string) rangeOp {
+	return func(t *testing.T, h *XMindHandler, f rangeFixture) *mcp.CallToolResult {
+		return callTool(t, h.DeleteTopic, map[string]any{"path": f.path, "sheet_id": f.sheetID, "topic_id": f.ids[title]})
+	}
+}
+
+// TestAttachedMutationsShiftRanges checks that summary and boundary ranges follow the attached
+// children they cover when a tool inserts or removes a child of their parent. The root starts
+// with children A, B, C, D.
+func TestAttachedMutationsShiftRanges(t *testing.T) {
+	cases := []struct {
+		name        string
+		rng         string // initial range of the boundary, and of the summary when withSummary
+		withSummary bool
+		op          rangeOp
+		want        string // "" means the range is dropped
+	}{
+		{"add before range", "(1,2)", true, addRangeTopic(float64(0)), "(2,3)"},
+		{"add at range start", "(1,2)", true, addRangeTopic(float64(1)), "(2,3)"},
+		{"add inside range", "(1,2)", true, addRangeTopic(float64(2)), "(1,3)"},
+		{"add just after range", "(1,2)", true, addRangeTopic(float64(3)), "(1,2)"},
+		{"append", "(1,2)", true, addRangeTopic(nil), "(1,2)"},
+		{"duplicate before range", "(1,2)", true, duplicateRangeTopic("D", 0), "(2,3)"},
+		{"move into range", "(1,2)", true, moveRangeTopic("X", "", float64(2)), "(1,3)"},
+		{"move out of range", "(1,2)", true, moveRangeTopic("B", "D", nil), "(1,1)"},
+		{"move within parent", "(1,2)", true, moveRangeTopic("D", "", float64(0)), "(2,3)"},
+		{"delete before range", "(1,2)", true, deleteRangeTopic("A"), "(0,1)"},
+		{"delete inside range", "(1,2)", true, deleteRangeTopic("C"), "(1,1)"},
+		{"delete after range", "(1,2)", true, deleteRangeTopic("D"), "(1,2)"},
+		{"delete only member", "(1,1)", true, deleteRangeTopic("B"), ""},
+		{"no summary, add before range", "(1,2)", false, addRangeTopic(float64(0)), "(2,3)"},
+		{"no summary, delete before range", "(1,2)", false, deleteRangeTopic("A"), "(0,1)"},
+		{"no summary, move out of range", "(1,1)", false, moveRangeTopic("B", "D", nil), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewXMindHandler()
+			f := setupRangedBoundary(t, h, tc.rng, tc.withSummary)
+			requireToolOK(t, tc.name, tc.op(t, h, f))
+			assertRootRanges(t, f, tc.want, tc.withSummary)
+		})
+	}
+}
+
+// TestDeleteTopicRemovesRelationships checks that deleting a topic removes every relationship
+// with an endpoint in the deleted subtree, keeps the others, and reports how many it removed.
+func TestDeleteTopicRemovesRelationships(t *testing.T) {
+	cases := []struct {
+		name, topicID, keptRelID string
+	}{
+		{"endpoint", kitchenSinkRelSubtopic1aID, kitchenSinkRelPlainID},
+		{"ancestor of endpoint", kitchenSinkRelMainTopic2ID, kitchenSinkRelLabelledID},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewXMindHandler()
+			path := copyFixture(t, kitchenSinkPath(t))
+			res := callTool(t, h.DeleteTopic, map[string]any{
+				"path": path, "sheet_id": kitchenSinkRelationshipsSheetID, "topic_id": tc.topicID,
+			})
+			requireToolOK(t, "delete", res)
+			if got, want := textContent(t, res), fmt.Sprintf("deleted topic %s; removed 1 relationship(s)", tc.topicID); got != want {
+				t.Errorf("reply = %q, want %q", got, want)
+			}
+			rels := findKitchenSinkSheetByID(t, path, kitchenSinkRelationshipsSheetID).Relationships
+			if len(rels) != 1 || rels[0].ID != tc.keptRelID {
+				t.Errorf("want only relationship %s left, got %+v", tc.keptRelID, rels)
+			}
+		})
+	}
+}
+
+// newSummaryRelationshipMap builds an A, B, C map with a summary over B alone and a relationship
+// from A to that summary topic. It returns the path, sheet ID, child IDs and summary topic ID.
+func newSummaryRelationshipMap(t *testing.T, h *XMindHandler) (path, sheetID string, ids []string, sumID string) {
+	t.Helper()
+	path, sheetID, rootID, ids := newABCMap(t, h)
+	sumID = addSummaryViaTool(t, h, path, sheetID, rootID, 1, 1)
+	addRelationshipViaTool(t, h, path, sheetID, ids[0], sumID)
+	return path, sheetID, ids, sumID
+}
+
+func assertNoRelationshipsAndTopicGone(t *testing.T, path, topicID string) {
+	t.Helper()
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findTopicByID(&sheets[0].RootTopic, topicID) != nil {
+		t.Fatalf("topic %s should have been removed", topicID)
+	}
+	if len(sheets[0].Relationships) != 0 {
+		t.Errorf("want no relationships, got %+v", sheets[0].Relationships)
+	}
+}
+
+// TestDeleteTopicRemovesRelationshipToCollapsedSummary deletes the only topic in a summary's
+// range, which removes the summary topic too, so a relationship to it must go as well.
+func TestDeleteTopicRemovesRelationshipToCollapsedSummary(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, ids, sumID := newSummaryRelationshipMap(t, h)
+
+	res := callTool(t, h.DeleteTopic, map[string]any{"path": path, "sheet_id": sheetID, "topic_id": ids[1]})
+	requireToolOK(t, "delete", res)
+	if got, want := textContent(t, res), fmt.Sprintf("deleted topic %s; removed 1 relationship(s)", ids[1]); got != want {
+		t.Errorf("reply = %q, want %q", got, want)
+	}
+	assertNoRelationshipsAndTopicGone(t, path, sumID)
+}
+
+// TestMoveTopicPrunesRelationshipToCollapsedSummary moves the only topic out of a summary's
+// range, which removes the summary topic, so a relationship to it must go as well.
+func TestMoveTopicPrunesRelationshipToCollapsedSummary(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, ids, sumID := newSummaryRelationshipMap(t, h)
+
+	parseMoveTopicResult(t, callTool(t, h.MoveTopic, map[string]any{
+		"path": path, "sheet_id": sheetID, "topic_id": ids[1], "new_parent_id": ids[0],
+	}))
+	assertNoRelationshipsAndTopicGone(t, path, sumID)
+}
+
+// TestDeleteTopicKeepsPreexistingDanglingRelationship checks that a delete only removes
+// relationships to the topics it deleted, not ones that were already broken.
+func TestDeleteTopicKeepsPreexistingDanglingRelationship(t *testing.T) {
+	h := NewXMindHandler()
+	path, sheetID, _, ids := newABCMap(t, h)
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheets[0].Relationships = []xmind.Relationship{{ID: "dangling", End1ID: "ghost-id", End2ID: ids[0]}}
+	if err := xmind.WriteMap(path, sheets); err != nil {
+		t.Fatal(err)
+	}
+
+	res := callTool(t, h.DeleteTopic, map[string]any{"path": path, "sheet_id": sheetID, "topic_id": ids[2]})
+	requireToolOK(t, "delete", res)
+	if got, want := textContent(t, res), fmt.Sprintf("deleted topic %s; removed 0 relationship(s)", ids[2]); got != want {
+		t.Errorf("reply = %q, want %q", got, want)
+	}
+	sheets, err = xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sheets[0].Relationships) != 1 || sheets[0].Relationships[0].ID != "dangling" {
+		t.Errorf("pre-existing relationship changed: %+v", sheets[0].Relationships)
+	}
+}
+
+// TestDeleteFloatingTopicAndChild deletes topics outside the attached tree: a child of a floating
+// topic, the floating topic itself, and a child of a summary topic.
+func TestDeleteFloatingTopicAndChild(t *testing.T) {
+	h := NewXMindHandler()
+	path := copyFixture(t, kitchenSinkPath(t))
+	sid := kitchenSinkRelationshipsSheetID
+	for _, id := range []string{kitchenSinkRelFloating2ChildID, kitchenSinkRelFloating2ID} {
+		requireToolOK(t, "delete "+id, callTool(t, h.DeleteTopic, map[string]any{"path": path, "sheet_id": sid, "topic_id": id}))
+		if findTopicByID(&findKitchenSinkSheetByID(t, path, sid).RootTopic, id) != nil {
+			t.Fatalf("topic %s still present", id)
+		}
+	}
+
+	path, sheetID, rootID, _ := newABCMap(t, h)
+	sumID := addSummaryViaTool(t, h, path, sheetID, rootID, 0, 2)
+	childID := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sheetID, "parent_id": sumID, "title": "Under summary",
+	})).ID
+	requireToolOK(t, "delete child of summary topic", callTool(t, h.DeleteTopic, map[string]any{
+		"path": path, "sheet_id": sheetID, "topic_id": childID,
+	}))
+	root := readFirstRoot(t, path)
+	if findTopicByID(root, childID) != nil || findTopicByID(root, sumID) == nil {
+		t.Errorf("want the child gone and the summary topic kept, got %+v", root.Children)
+	}
+}
+
+func TestShiftRangeForInsert(t *testing.T) {
+	inserts := []struct{ from, to, idx, wantFrom, wantTo int }{
+		{1, 2, 0, 2, 3}, // before the range
+		{1, 2, 1, 2, 3}, // at its start
+		{1, 2, 2, 1, 3}, // inside it
+		{1, 2, 3, 1, 2}, // just after it
+		{0, 0, 0, 1, 1},
+	}
+	for _, c := range inserts {
+		if f, to := shiftRangeForInsert(c.from, c.to, c.idx); f != c.wantFrom || to != c.wantTo {
+			t.Errorf("insert at %d into (%d,%d) = (%d,%d), want (%d,%d)", c.idx, c.from, c.to, f, to, c.wantFrom, c.wantTo)
+		}
+	}
+}
+
+func TestShiftRangeForRemove(t *testing.T) {
+	removes := []struct {
+		from, to, idx, wantFrom, wantTo int
+		wantKeep                        bool
+	}{
+		{1, 2, 0, 0, 1, true}, // before the range
+		{1, 2, 1, 1, 1, true}, // its first child
+		{1, 2, 2, 1, 1, true}, // its last child
+		{1, 2, 3, 1, 2, true}, // after it
+		{1, 1, 1, 1, 0, false},
+	}
+	for _, c := range removes {
+		f, to, keep := shiftRangeForRemove(c.from, c.to, c.idx)
+		if keep != c.wantKeep || (keep && (f != c.wantFrom || to != c.wantTo)) {
+			t.Errorf("remove %d from (%d,%d) = (%d,%d, keep %v), want (%d,%d, keep %v)",
+				c.idx, c.from, c.to, f, to, keep, c.wantFrom, c.wantTo, c.wantKeep)
+		}
+	}
+}
+
+// TestShiftRangeInsertThenRemove checks that removing a child just inserted at any index
+// restores the original range.
+func TestShiftRangeInsertThenRemove(t *testing.T) {
+	for from := range 4 {
+		for to := from; to < 4; to++ {
+			for idx := range 6 {
+				f, tt := shiftRangeForInsert(from, to, idx)
+				if gf, gt, keep := shiftRangeForRemove(f, tt, idx); !keep || gf != from || gt != to {
+					t.Errorf("insert then remove at %d: (%d,%d) became (%d,%d, keep %v)", idx, from, to, gf, gt, keep)
+				}
+			}
+		}
 	}
 }

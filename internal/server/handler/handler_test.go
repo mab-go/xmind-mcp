@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"errors"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -189,13 +187,14 @@ func TestDeepCloneTopicDetachedAndNestedDescriptors(t *testing.T) {
 	assertNestedDescriptorsRemapped(t, &clone)
 }
 
-// danglingSummaryFixtureTopic builds a topic whose summary descriptor references a topicId that
-// exists nowhere in its subtree (no matching Children.Summary entry).
+// danglingSummaryFixtureTopic builds a topic with two summary descriptors that have no summary
+// topic in its subtree: one names a topicId that exists nowhere, the other has no topicId.
 func danglingSummaryFixtureTopic() *xmind.Topic {
 	return &xmind.Topic{
 		ID: "root-old",
 		Summaries: []xmind.Summary{
 			{ID: "sum-old", Range: "(0,0)", TopicID: "ghost-id"},
+			{ID: "sum-empty", Range: "(0,0)"},
 		},
 		Children: &xmind.Children{
 			Attached: []xmind.Topic{{ID: "a-old", Title: "A"}},
@@ -203,19 +202,15 @@ func danglingSummaryFixtureTopic() *xmind.Topic {
 	}
 }
 
-// TestDeepCloneTopicDanglingSummaryRef pins the dangling-reference failure to the typed
-// cloneDanglingSummaryRefError so callers can classify it as a tool error (issue #46).
+// TestDeepCloneTopicDanglingSummaryRef checks that the copy leaves out a summary descriptor whose
+// topicId is missing from the subtree, and keeps, under a new id, one that has no topicId.
 func TestDeepCloneTopicDanglingSummaryRef(t *testing.T) {
-	_, err := deepCloneTopic(danglingSummaryFixtureTopic())
-	if err == nil {
-		t.Fatal("expected an error for a dangling summary reference, got nil")
+	clone, err := deepCloneTopic(danglingSummaryFixtureTopic())
+	if err != nil {
+		t.Fatal(err)
 	}
-	var dangErr *cloneDanglingSummaryRefError
-	if !errors.As(err, &dangErr) {
-		t.Fatalf("expected *cloneDanglingSummaryRefError, got %T: %v", err, err)
-	}
-	if !strings.Contains(err.Error(), "not found in cloned subtree") {
-		t.Fatalf("unexpected message: %q", err.Error())
+	if len(clone.Summaries) != 1 || clone.Summaries[0].TopicID != "" || clone.Summaries[0].ID == "sum-empty" {
+		t.Fatalf("want only the descriptor without a topicId, re-IDed; got %+v", clone.Summaries)
 	}
 }
 

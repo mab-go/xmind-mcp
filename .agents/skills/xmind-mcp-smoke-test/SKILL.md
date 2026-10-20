@@ -33,6 +33,7 @@ Several tools return IDs you must thread into later calls. Note where each comes
 - Root-topic IDs are **not** returned by `create_map` or `open_map`. Get them from `xmind_get_subtree` (the root node's `id`).
 - `xmind_add_topic`, `xmind_add_topics_bulk`, `xmind_duplicate_topic`, `xmind_move_topic` return JSON with the new/affected IDs.
 - `xmind_import_from_outline` into a **new sheet** (no `sheet_id`) returns the new sheet id in its text (`"imported N topics into new sheet id <ID>"`). Parse it out.
+- `xmind_add_summary` returns the new summary topic's id in its text (`"added summary topic id <ID>"`). Parse it out.
 - Relationship IDs come from `xmind_list_relationships`.
 
 Keep a running scratch-pad of `sheetMain`, `rootId`, `alphaId`, etc. as you go.
@@ -79,7 +80,7 @@ Run the phases in order; later phases depend on structure built earlier. For eac
 27. `xmind_reorder_children` → parent `rootId`, `ordered_ids=[betaId, alphaId]` (must list every attached child exactly once). **Assert** via `xmind_get_subtree`: root children now `[Beta, Alpha]`.
 28. `xmind_duplicate_topic` → `topic_id=alphaId`, `target_parent_id=rootId`. Capture `newRootId`, `copiedCount`. **Assert:** `newRootId != alphaId`; `xmind_get_subtree` shows a second Alpha subtree with fresh IDs.
 29. `xmind_add_floating_topic` → `sheetMain`, `title="Floater"`. **Assert** via `xmind_get_topic_properties(rootId)`: `childCounts.detached >= 1`; via `xmind_get_subtree(sheetMain)`: "Floater" appears in the root's children with `childType: "detached"`, and the attached children have no `childType`; and via `xmind_search_topics(sheetMain, query="Floater")`: the match has `childType: "detached"`.
-30. `xmind_delete_topic` → `newRootId` (the duplicate). **Assert** via `xmind_get_subtree`: the duplicated subtree is gone; original `Alpha` remains.
+30. `xmind_add_relationship` → `from_id=newRootId`, `to_id=betaId`. Then `xmind_delete_topic` → `newRootId` (the duplicate). **Assert:** the delete result ends with `removed 1 relationship(s)`; `xmind_list_relationships(sheetMain)` shows count = 0 (deleting a topic removes the relationships connected to it); and via `xmind_get_subtree`: the duplicated subtree is gone, original `Alpha` remains.
 
 ### Phase 6 — Relationships (sheet-level)
 31. `xmind_add_relationship` → `from_id=alphaId`, `to_id=betaId`, `label="rel"`.
@@ -88,7 +89,7 @@ Run the phases in order; later phases depend on structure built earlier. For eac
 34. `xmind_delete_relationship` → `relId`. **Assert** via `xmind_list_relationships`: count = 0.
 
 ### Phase 7 — Summaries & boundaries
-35. `xmind_add_summary` → parent `alphaId`, `from_index=0`, `to_index=1`, `title="Sum"` (spans `A1`,`A2`). **Assert** via `xmind_get_topic_properties(alphaId)`: `summaryCount >= 1` **and** `childCounts.summary >= 1` — this confirms the required double-write (range descriptor + summary topic). Also **Assert** via `xmind_get_subtree(alphaId)`: "Sum" appears in Alpha's children with `childType: "summary"`.
+35. `xmind_add_summary` → parent `alphaId`, `from_index=0`, `to_index=1`, `title="Sum"` (spans `A1`,`A2`). Capture `sumId` from the result text (E9 needs it). **Assert** via `xmind_get_topic_properties(alphaId)`: `summaryCount >= 1` **and** `childCounts.summary >= 1` — this confirms the required double-write (range descriptor + summary topic). Also **Assert** via `xmind_get_subtree(alphaId)`: "Sum" appears in Alpha's children with `childType: "summary"`.
 36. `xmind_add_boundary` → parent `alphaId`, `title="Bound"`. **Assert** via `xmind_get_topic_properties(alphaId)`: `boundaryCount >= 1`, a boundary with title `"Bound"`.
 
 ### Phase 8 — Utilities: outline export/import, find & replace
@@ -112,6 +113,7 @@ E5. `xmind_reorder_children` → `rootId` with an `ordered_ids` list built from 
 E6. `xmind_move_topic` → move `alphaId` under one of its own descendants (e.g. `A1`). **Expect:** tool error (cannot move a topic into its own subtree).
 E7. Create the **error-scenario file** with `xmind_create_map` (single sheet). Then `xmind_delete_sheet` on its only sheet. **Expect:** tool error ("cannot delete the last sheet").
 E8. `xmind_add_summary` → `sheetMain`, parent `alphaId`, `from_index=0.5`, `to_index=1`. **Expect:** tool error ("invalid argument from_index: must be a whole number"). `from_index` is declared an integer, so a client that checks arguments against the schema may refuse to send the call. If it does, record PASS with the client's message and note that the server check was not reached.
+E9. `xmind_move_topic` → `sheetMain`, `topic_id=sumId`, `new_parent_id=rootId`. **Expect:** tool error ("cannot move a summary topic").
 
 ## Cleanup
 
@@ -132,7 +134,7 @@ Produce a **per-tool PASS/FAIL report** suitable for release sign-off. Structure
    | ... | ... | ... |
 
    Every one of the 27 tools must appear. Mark any not reached as **NOT RUN** with the reason.
-3. **Error-path table** — E1–E8 with PASS/FAIL and the actual message returned.
+3. **Error-path table** — E1–E9 with PASS/FAIL and the actual message returned.
 4. **Final verdict:** `RELEASE OK` only if every tool ran and every assertion + error path passed. Otherwise `RELEASE BLOCKED` with the failing items listed first.
 
 State failures plainly with the exact tool call and the observed vs. expected result. Do not soften or omit a failure. If a step could not run because an earlier step failed, mark it BLOCKED and say which step blocked it.

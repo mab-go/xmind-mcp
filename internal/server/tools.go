@@ -237,7 +237,7 @@ var toolRenameTopic = mcp.NewTool(
 
 var toolDeleteTopic = mcp.NewTool(
 	"xmind_delete_topic",
-	mcp.WithDescription("Delete a topic and its descendants. Cannot delete the sheet root."),
+	mcp.WithDescription("Delete a topic and its descendants, and any relationships connected to a deleted topic. Summary and boundary ranges on the parent shrink to match; a summary or boundary left with no children is removed. Cannot delete the sheet root."),
 	withAnnotations("Delete Topic", effectDestructiveIdempotent),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
@@ -246,14 +246,14 @@ var toolDeleteTopic = mcp.NewTool(
 
 var toolMoveTopic = mcp.NewTool(
 	"xmind_move_topic",
-	mcp.WithDescription("Move a topic (and subtree) to a new parent as an attached child. Use position to control insertion order; omit to append at the end. Returns JSON: {\"topicId\":\"…\",\"parentId\":\"…\",\"position\":N,\"siblingCount\":N}."),
+	mcp.WithDescription("Move a topic (and subtree) to a new parent as an attached child. Use position to control insertion order; omit to append at the end. Summary topics cannot be moved. Moving the last child out of a summary's range removes that summary. Returns JSON: {\"topicId\":\"…\",\"parentId\":\"…\",\"position\":N,\"siblingCount\":N}."),
 	withAnnotations("Move Topic", effectDestructiveIdempotent),
 	handler.OutputSchema[handler.MoveTopicResponse](),
 	mcp.WithString("path", mcp.Required(), mcp.Description("Absolute or relative path to the .xmind file")),
 	mcp.WithString("sheet_id", mcp.Required(), mcp.Description("Target sheet")),
 	mcp.WithString("topic_id", mcp.Required(), mcp.Description("ID of the topic to move")),
 	mcp.WithString("new_parent_id", mcp.Required(), mcp.Description("ID of the new parent topic")),
-	mcp.WithInteger("position", mcp.Min(0), mcp.Description("Zero-based insertion index among the new parent's attached children (0 = first child); valid range is 0 to the current child count. Omit to append at end.")),
+	mcp.WithInteger("position", mcp.Min(0), mcp.Description("Zero-based insertion index among the new parent's attached children (0 = first child); valid range is 0 to the current child count, or to the count minus 1 when the topic is already an attached child of that parent. Omit to append at end.")),
 )
 
 var toolReorderChildren = mcp.NewTool(
