@@ -19,7 +19,7 @@ var (
 	cmd = &cobra.Command{
 		Use:     "xmind-mcp",
 		Short:   "XMind MCP Server",
-		Long:    "An MCP server for reading and writing local XMind mind map files.",
+		Long:    "An unofficial MCP server for reading and writing local XMind mind map files.",
 		Version: fmt.Sprintf("xmind-mcp %s (%s; %s)", version.Version, version.ShortCommit(), version.Date),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			lvl, err := parseLogLevel(viper.GetString("log-level"))

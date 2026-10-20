@@ -19,7 +19,7 @@ const (
 	// serverTitle is the human-readable display name.
 	serverTitle = "XMind MCP"
 	// serverDescription is a one-sentence summary of what the server does.
-	serverDescription = "An MCP server for reading and writing local XMind mind map files."
+	serverDescription = "An unofficial MCP server for reading and writing local XMind mind map files."
 	// serverWebsiteURL is the project's home page.
 	serverWebsiteURL = "https://github.com/mab-go/xmind-mcp"
 )
