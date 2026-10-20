@@ -13,6 +13,11 @@ reading and writing local [XMind](https://xmind.com) mind map files. XMind MCP
 exposes 27 tools that let any MCP-compatible AI client create, navigate, and
 edit `.xmind` files directly on disk.
 
+> **Note:** xmind-mcp is an independent project. It is not affiliated with,
+> endorsed by, or sponsored by SUPERMIND PTE. LIMITED, the maker of XMind. The
+> XMind name is used only to identify the app and file format this server
+> works with.
+
 <p align="center">
   <img src="docs/xmind-mcp-repo-mind-map.png" alt="A mind map overview of the xmind-mcp project" width="85%" />
 </p>
