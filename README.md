@@ -237,10 +237,10 @@ etc.)—see each row.
 
 On success, **`xmind_add_topic`**, **`xmind_add_topics_bulk`**,
 **`xmind_duplicate_topic`**, and **`xmind_move_topic`** return **JSON** (topic
-ids, insertion indices, sibling counts, and related fields). Exact keys match
-each tool's description from the running MCP server. Other mutation tools in
-this tier return plain-text success messages unless their descriptions say
-otherwise.
+ids, insertion indices, sibling counts, and related fields). Each one declares
+an output schema listing the exact keys, which clients see in `tools/list`.
+Other mutation tools in this tier return plain-text success messages unless
+their descriptions say otherwise.
 
 | Tool                              | Description                                                                                                                                             |
 |-----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -261,18 +261,18 @@ otherwise.
 
 ### Tier 4: Utilities
 
-| Tool                        | Description                                                            |
-|-----------------------------|------------------------------------------------------------------------|
-| `xmind_flatten_to_outline`  | Export a sheet or subtree as indented plain text or Markdown.          |
-| `xmind_import_from_outline` | Build a map or branch from an indented plain text or Markdown outline. |
-| `xmind_find_and_replace`    | Rename topics matching a pattern across an entire sheet.               |
+| Tool                        | Description                                                                                                                                                                         |
+|-----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `xmind_flatten_to_outline`  | Export a sheet or subtree as indented plain text or Markdown.                                                                                                                       |
+| `xmind_import_from_outline` | Build a map or branch from an indented plain text or Markdown outline.                                                                                                              |
+| `xmind_find_and_replace`    | Replace text in topic titles (case-insensitive substring, or whole-title match with `exact_match`) on one sheet, or on all sheets when `sheet_id` is omitted; success body is JSON. |
 
 ------------------------------------------------------------------------
 
 ## Development
 
-First time only, install project-local tools (golangci-lint, goimports)
-into `./bin`:
+First time only, install project-local tools (golangci-lint, goimports,
+gocyclo) into `./bin`:
 
 ```bash
 make setup

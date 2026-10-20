@@ -132,7 +132,7 @@ func buildSheet() xmind.Sheet {
 		withMarkers(leaf("import_from_outline"), "priority-4"),
 		withMarkers(leaf("find_and_replace"), "priority-4"),
 	)
-	tier4 = withNote(tier4, "Export to text/markdown, import from outlines, bulk rename across a sheet.")
+	tier4 = withNote(tier4, "Export to text/markdown, import from outlines, find and replace in titles on one sheet or all.")
 
 	tools := topic("🛠️ 27 Tools", tier1, tier2, tier3, tier4)
 	tools = withNote(tools, "All prefixed with xmind_ to avoid collisions in multi-server MCP environments.")
