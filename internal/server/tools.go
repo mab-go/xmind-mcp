@@ -373,6 +373,7 @@ var toolFlattenToOutline = mcp.NewTool(
 	"xmind_flatten_to_outline",
 	mcp.WithDescription(
 		"Export a topic subtree as indented plain text or Markdown (attached children only). "+
+			"Markdown uses headings down to level 6; deeper topics become nested '- ' list items. "+
 			"Optional include_notes appends plain-text note lines below each topic: Markdown uses blockquotes (>), "+
 			"plain text uses indented [note] lines.",
 	),

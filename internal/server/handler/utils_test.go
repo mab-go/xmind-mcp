@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -409,6 +410,95 @@ func TestFlattenImportRoundTripMarkdown(t *testing.T) {
 	if flat1 != flat2 {
 		t.Fatalf("round-trip mismatch:\n---\n%s\n---\n%s\n", flat1, flat2)
 	}
+}
+
+// TestFlattenImportRoundTripDeepMarkdown checks that Markdown flatten writes topics below heading
+// level 6 as nested list items, with their notes inside the item, and that importing that output
+// rebuilds the same tree.
+func TestFlattenImportRoundTripDeepMarkdown(t *testing.T) {
+	h := NewXMindHandler()
+	path := filepath.Join(t.TempDir(), "deep.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "R"})
+	sheets, _ := xmind.ReadMap(path)
+	sid := sheets[0].ID
+	addChild := func(parentID, title string) string {
+		t.Helper()
+		res := callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": parentID, "title": title})
+		if res.IsError {
+			t.Fatal(textContent(t, res))
+		}
+		return parseAddTopicResult(t, res).ID
+	}
+	// R -> T1 -> ... -> T9, plus T8b as a second child of T7.
+	ids := []string{sheets[0].RootTopic.ID}
+	for i := 1; i <= 9; i++ {
+		ids = append(ids, addChild(ids[i-1], fmt.Sprintf("T%d", i)))
+	}
+	addChild(ids[7], "T8b")
+	callTool(t, h.SetTopicProperties, map[string]any{"path": path, "sheet_id": sid, "topic_id": ids[7], "notes": "note a\nnote b"})
+
+	outline := textContent(t, callTool(t, h.FlattenToOutline, map[string]any{
+		"path": path, "sheet_id": sid, "format": "markdown", "include_notes": true,
+	}))
+	const want = "# R\n\n## T1\n### T2\n#### T3\n##### T4\n###### T5\n" +
+		"- T6\n  - T7\n    > note a\n    > note b\n\n    - T8\n      - T9\n    - T8b"
+	if outline != want {
+		t.Fatalf("Markdown outline:\n%s\nwant:\n%s", outline, want)
+	}
+
+	if res := callTool(t, h.ImportFromOutline, map[string]any{"path": path, "outline": outline}); res.IsError {
+		t.Fatal(textContent(t, res))
+	}
+	sheets, _ = xmind.ReadMap(path)
+	textOutline := func(sheetID string) string {
+		return textContent(t, callTool(t, h.FlattenToOutline, map[string]any{"path": path, "sheet_id": sheetID, "format": "text"}))
+	}
+	if orig, imported := textOutline(sid), textOutline(sheets[len(sheets)-1].ID); orig != imported {
+		t.Fatalf("imported tree differs:\n--- original\n%s\n--- imported\n%s", orig, imported)
+	}
+}
+
+// TestFlattenImportRoundTripKitchenSinkMarkdown flattens each kitchen-sink sheet to Markdown,
+// imports that as a new sheet, and checks the new sheet has the same tree. The trees are compared
+// as text outlines, which indent by real depth: Markdown would hide depth lost past heading level
+// 6, because both flattens would lose it the same way. Trailing spaces are ignored, because import
+// trims titles.
+func TestFlattenImportRoundTripKitchenSinkMarkdown(t *testing.T) {
+	h := NewXMindHandler()
+	path := copyFixture(t, kitchenSinkPath(t))
+	sheets, err := xmind.ReadMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flatten := func(t *testing.T, sheetID, format string) string {
+		t.Helper()
+		return textContent(t, callTool(t, h.FlattenToOutline, map[string]any{"path": path, "sheet_id": sheetID, "format": format}))
+	}
+	for _, sh := range sheets {
+		t.Run(sh.Title, func(t *testing.T) {
+			res := callTool(t, h.ImportFromOutline, map[string]any{"path": path, "outline": flatten(t, sh.ID, "markdown")})
+			if res.IsError {
+				t.Fatal(textContent(t, res))
+			}
+			after, err := xmind.ReadMap(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, got := trimLineEnds(flatten(t, sh.ID, "text")), trimLineEnds(flatten(t, after[len(after)-1].ID, "text"))
+			if got != want {
+				t.Fatalf("imported tree differs:\n--- original\n%s\n--- imported\n%s", want, got)
+			}
+		})
+	}
+}
+
+// trimLineEnds removes trailing spaces from every line of s.
+func trimLineEnds(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestFindAndReplaceEmptyFind(t *testing.T) {
