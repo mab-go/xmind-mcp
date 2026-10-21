@@ -58,6 +58,7 @@ func openZipReaderAtPath(path string) (*zip.Reader, *os.File, error) {
 
 // copyZipEntryRaw copies one entry from an existing zip into zw using raw compressed bytes.
 // The caller must skip entries (e.g. content.json) that should not be copied verbatim.
+// OpenRaw's reader reads the archive in place, so there is nothing to close.
 func copyZipEntryRaw(zw *zip.Writer, src *zip.File) error {
 	fh := src.FileHeader
 	if len(fh.Extra) > 0 {
@@ -72,13 +73,7 @@ func copyZipEntryRaw(zw *zip.Writer, src *zip.File) error {
 		return fmt.Errorf("zip open raw %q: %w", src.Name, err)
 	}
 	if _, err := io.Copy(dst, raw); err != nil {
-		if closer, ok := raw.(io.Closer); ok {
-			_ = closer.Close()
-		}
 		return fmt.Errorf("copy zip entry %q: %w", src.Name, err)
-	}
-	if closer, ok := raw.(io.Closer); ok {
-		_ = closer.Close()
 	}
 	return nil
 }

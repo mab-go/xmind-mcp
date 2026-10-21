@@ -69,7 +69,7 @@ internal/
     reader.go             — open zip, parse content.json → []Sheet (ReadMap, parseContentFromZip)
     reader_test.go        — ReadMap errors, fixture parsing, and the WriteMap round trip
     writer.go             — serialize []Sheet → content.json, write back to zip (WriteMap, writeMapBody)
-    writer_test.go        — WriteMap/CreateNewMap: entry preservation, atomic failure, no-overwrite, file modes, read-only maps refused, undecodable values kept or refused
+    writer_test.go        — WriteMap/CreateNewMap: entry preservation (entry order, headers and raw bytes of entries other than content.json), atomic failure, no-overwrite, file modes, read-only maps refused, undecodable values kept or refused
     update.go             — OpenMapForUpdate/MapWriter: single-open read-then-commit handle for mutations
     update_test.go        — Commit/WriteMap parity, MapWriter lifecycle guards, writes through symlinks
     pathlock.go           — lockPath/resolveMapPath: in-process per-file write lock, keyed by the symlink-resolved path
