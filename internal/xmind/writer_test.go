@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -491,9 +494,6 @@ func TestWritesPreserveFileMode(t *testing.T) {
 	})
 }
 
-// TestWritesRefuseReadOnlyFile checks that WriteMap and Commit refuse to replace a map file
-// that has no write permission bits, although the rename would succeed in its writable
-// directory, and leave the file and its directory as they were.
 // mapWrites are the two ways to save a map: a MapWriter's Commit and a fresh WriteMap.
 var mapWrites = []struct {
 	name  string
@@ -559,6 +559,182 @@ func assertMapUntouched(t *testing.T, dst, before string, mode fs.FileMode) {
 		if strings.HasPrefix(e.Name(), ".xmind-tmp-") {
 			t.Errorf("leaked temp file: %s", e.Name())
 		}
+	}
+}
+
+// rawCopyContentJSON is a minimal content.json that passes the save check.
+const rawCopyContentJSON = `[{"id":"s1","class":"sheet","title":"S","rootTopic":{"id":"r","class":"topic","title":"R"}}]`
+
+// TestRawCopyPreservesEntryHeadersAndBytes checks that both writes copy every entry other than
+// content.json as it was: same order, same header, same compressed bytes. The fixture holds
+// header values Go's zip writer never produces, so a copy that rebuilt headers would fail.
+func TestRawCopyPreservesEntryHeadersAndBytes(t *testing.T) {
+	for _, tc := range mapWrites {
+		t.Run(tc.name, func(t *testing.T) {
+			// Compare against an untouched original, never the file being saved.
+			orig := rawCopyFixture(t)
+			dst := filepath.Join(filepath.Dir(orig), "m.xmind")
+			if err := copyFile(orig, dst); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.write(t, dst); err != nil {
+				t.Fatal(err)
+			}
+			want := entriesExceptContentJSON(openZipReader(t, orig))
+			got := entriesExceptContentJSON(openZipReader(t, dst))
+			assertRawCopyFixture(t, want)
+			if !slices.Equal(entryNames(got), entryNames(want)) {
+				t.Fatalf("entries = %v, want %v", entryNames(got), entryNames(want))
+			}
+			for i := range want {
+				assertRawCopy(t, want[i], got[i])
+			}
+		})
+	}
+}
+
+// rawCopyFixture writes a map whose entries other than content.json each carry something a copy
+// could lose, and returns its path. content.json is not last, and the entries are not sorted.
+func rawCopyFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "orig.xmind")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	zw := zip.NewWriter(f)
+
+	dir := &zip.FileHeader{Name: "dir/"}
+	dir.SetMode(fs.ModeDir | 0o755)
+	writeZipEntry(t, zw.CreateHeader, dir, nil)
+
+	// Written raw, with header values CreateHeader would replace: it sets the reader version and
+	// the creator version's low byte to 20 and adds the data-descriptor flag.
+	stored := []byte("stored body")
+	raw := &zip.FileHeader{
+		Name:               "stored.bin",
+		Method:             zip.Store,
+		CreatorVersion:     0x3F,
+		ReaderVersion:      10,
+		CRC32:              crc32.ChecksumIEEE(stored),
+		CompressedSize64:   uint64(len(stored)),
+		UncompressedSize64: uint64(len(stored)),
+		Extra:              []byte{0xFE, 0xCA, 0x04, 0x00, 1, 2, 3, 4}, // unregistered header ID 0xCAFE
+	}
+	raw.SetMode(0o640)
+	writeZipEntry(t, zw.CreateRaw, raw, stored)
+
+	writeZipEntry(t, zw.CreateHeader, &zip.FileHeader{Name: "content.json", Method: zip.Deflate}, []byte(rawCopyContentJSON))
+	writeZipEntry(t, zw.CreateHeader, &zip.FileHeader{Name: "notes/comment.txt", Method: zip.Deflate, Comment: "kept"},
+		bytes.Repeat([]byte("xmind "), 100))
+	writeZipEntry(t, zw.CreateHeader, &zip.FileHeader{
+		Name:     "dated.txt",
+		Method:   zip.Deflate,
+		Modified: time.Date(2024, 3, 9, 14, 30, 8, 0, time.FixedZone("", -5*3600)),
+	}, []byte("dated"))
+
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// writeZipEntry adds an entry made by create (a zip.Writer's CreateHeader or CreateRaw) and
+// writes body to it.
+func writeZipEntry(t *testing.T, create func(*zip.FileHeader) (io.Writer, error), fh *zip.FileHeader, body []byte) {
+	t.Helper()
+	w, err := create(fh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertRawCopyFixture fails unless the fixture's entries carry what the test is about, so a
+// change to the fixture or to Go's zip writer can't quietly make the test easier.
+func assertRawCopyFixture(t *testing.T, files []*zip.File) {
+	t.Helper()
+	f := make(map[string]*zip.File, len(files))
+	for _, zf := range files {
+		f[zf.Name] = zf
+	}
+	for _, name := range []string{"dir/", "stored.bin", "notes/comment.txt", "dated.txt"} {
+		if f[name] == nil {
+			t.Fatalf("fixture entries = %v, want one named %s", entryNames(files), name)
+		}
+	}
+	for _, c := range []struct {
+		what      string
+		got, want any
+	}{
+		{"stored.bin reader version", f["stored.bin"].ReaderVersion, uint16(10)},
+		{"stored.bin data-descriptor flag", f["stored.bin"].Flags & 0x8, uint16(0)},
+		{"stored.bin has a 0xCAFE extra field", bytes.HasPrefix(f["stored.bin"].Extra, []byte{0xFE, 0xCA}), true},
+		{"notes/comment.txt comment", f["notes/comment.txt"].Comment, "kept"},
+		{"notes/comment.txt is compressed", f["notes/comment.txt"].CompressedSize64 < f["notes/comment.txt"].UncompressedSize64, true},
+		{"dated.txt Modified is in UTC", f["dated.txt"].Modified.Location() == time.UTC, false},
+		{"dir/ is a directory", f["dir/"].Mode().IsDir(), true},
+	} {
+		if c.got != c.want {
+			t.Errorf("fixture: %s = %v, want %v", c.what, c.got, c.want)
+		}
+	}
+}
+
+// entriesExceptContentJSON returns zr's entries other than content.json, in zip order.
+func entriesExceptContentJSON(zr *zip.Reader) []*zip.File {
+	var files []*zip.File
+	for _, f := range zr.File {
+		if f.Name != "content.json" {
+			files = append(files, f)
+		}
+	}
+	return files
+}
+
+// entryNames returns the names of files, in order.
+func entryNames(files []*zip.File) []string {
+	names := make([]string, len(files))
+	for i, f := range files {
+		names[i] = f.Name
+	}
+	return names
+}
+
+// rawEntryBytes returns f's data as stored in the archive, still compressed.
+func rawEntryBytes(t *testing.T, f *zip.File) []byte {
+	t.Helper()
+	r, err := f.OpenRaw()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// assertRawCopy fails unless got has want's header and raw bytes. Modified is compared with
+// Equal, because the reader builds a new time zone for each read.
+func assertRawCopy(t *testing.T, want, got *zip.File) {
+	t.Helper()
+	w, g := want.FileHeader, got.FileHeader
+	if !g.Modified.Equal(w.Modified) {
+		t.Errorf("%s: Modified = %v, want %v", want.Name, g.Modified, w.Modified)
+	}
+	w.Modified, g.Modified = time.Time{}, time.Time{}
+	if !reflect.DeepEqual(g, w) {
+		t.Errorf("%s: header = %+v, want %+v", want.Name, g, w)
+	}
+	if !bytes.Equal(rawEntryBytes(t, got), rawEntryBytes(t, want)) {
+		t.Errorf("%s: raw bytes differ from the original's", want.Name)
 	}
 }
 
