@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -216,6 +219,39 @@ func TestDeepCloneTopicDanglingSummaryRef(t *testing.T) {
 	}
 	if len(clone.Summaries) != 1 || clone.Summaries[0].TopicID != "" || clone.Summaries[0].ID == "sum-empty" {
 		t.Fatalf("want only the descriptor without a topicId, re-IDed; got %+v", clone.Summaries)
+	}
+}
+
+// TestDeepCloneTopicKeepsRawFields checks that a clone keeps values the read could not decode:
+// a position (no handler writes it) and labels (a handler does). Saving the copy is then still
+// refused, so duplicating a topic can't drop the raw labels.
+func TestDeepCloneTopicKeepsRawFields(t *testing.T) {
+	var src xmind.Topic
+	if err := json.Unmarshal([]byte(`{"id":"a","title":"A","position":"x","labels":"x"}`), &src); err != nil {
+		t.Fatal(err)
+	}
+	clone, err := deepCloneTopic(&src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clone.ID == "a" {
+		t.Error("the clone kept the source id")
+	}
+	out, err := json.Marshal(&clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kept := range []string{`"position":"x"`, `"labels":"x"`} {
+		if !strings.Contains(string(out), kept) {
+			t.Errorf("clone %s lost %s", out, kept)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "m.xmind")
+	if err := xmind.CreateNewMap(path, []xmind.Sheet{{ID: "s", RootTopic: xmind.Topic{ID: "r"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := xmind.WriteMap(path, []xmind.Sheet{{ID: "s", RootTopic: clone}}); !errors.Is(err, xmind.ErrUndecodableField) {
+		t.Errorf("saving the clone: err = %v, want ErrUndecodableField", err)
 	}
 }
 

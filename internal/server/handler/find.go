@@ -59,6 +59,20 @@ func plainNoteContent(t *xmind.Topic) string {
 	return t.Notes.Plain.Content
 }
 
+// responseMarkers copies markers for a tool response, each without a value the read could not
+// decode (see xmind.Marker.WithoutRawFields), so the output matches its declared schema. It
+// returns nil for no markers.
+func responseMarkers(markers []xmind.Marker) []xmind.Marker {
+	if len(markers) == 0 {
+		return nil
+	}
+	out := make([]xmind.Marker, len(markers))
+	for i := range markers {
+		out[i] = markers[i].WithoutRawFields()
+	}
+	return out
+}
+
 func topicToSubtree(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpts) *SubtreeNode {
 	if t == nil {
 		return nil
@@ -68,7 +82,7 @@ func topicToSubtree(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpt
 		Title:          t.Title,
 		StructureClass: t.StructureClass,
 		Labels:         append([]string(nil), t.Labels...),
-		Markers:        append([]xmind.Marker(nil), t.Markers...),
+		Markers:        responseMarkers(t.Markers),
 	}
 	if opts.includeNotes {
 		if plain := plainNoteContent(t); plain != "" {
@@ -520,9 +534,7 @@ func topicPropertiesBase(topic *xmind.Topic) TopicPropertiesResponse {
 	if len(topic.Labels) > 0 {
 		out.Labels = append([]string(nil), topic.Labels...)
 	}
-	if len(topic.Markers) > 0 {
-		out.Markers = append([]xmind.Marker(nil), topic.Markers...)
-	}
+	out.Markers = responseMarkers(topic.Markers)
 	return out
 }
 

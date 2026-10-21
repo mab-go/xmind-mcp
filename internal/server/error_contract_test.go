@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -286,6 +287,64 @@ func zipWith(t *testing.T, name, content string) []byte {
 	return buf.Bytes()
 }
 
+// fixtureWithField returns a map holding the fixture's content.json with key set to value on
+// the topic topicID. It edits the JSON directly, so value can have a shape the codec can't
+// decode, which typed structs can't express.
+func fixtureWithField(t *testing.T, fixture []byte, topicID, key string, value any) []byte {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(fixture), int64(len(fixture)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := zr.Open("content.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(f)
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sheets []map[string]any
+	if err := json.Unmarshal(data, &sheets); err != nil {
+		t.Fatal(err)
+	}
+	var topic map[string]any
+	for _, sh := range sheets {
+		if root, ok := sh["rootTopic"].(map[string]any); ok && topic == nil {
+			topic = jsonTopicByID(root, topicID)
+		}
+	}
+	if topic == nil {
+		t.Fatalf("no topic %q in the fixture", topicID)
+	}
+	topic[key] = value
+	out, err := json.Marshal(sheets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return zipWith(t, "content.json", string(out))
+}
+
+// jsonTopicByID returns the topic with id in the decoded topic tree t, or nil.
+func jsonTopicByID(t map[string]any, id string) map[string]any {
+	if t["id"] == id {
+		return t
+	}
+	children, _ := t["children"].(map[string]any)
+	for _, list := range []string{"attached", "detached", "summary"} {
+		items, _ := children[list].([]any)
+		for _, item := range items {
+			if child, ok := item.(map[string]any); ok {
+				if found := jsonTopicByID(child, id); found != nil {
+					return found
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // pathScenarios are the scenarios about the path argument: missing or mistyped, or naming
 // something that is not a readable map.
 func pathScenarios() []contractScenario {
@@ -388,6 +447,18 @@ func readOnlyScenarios() []contractScenario {
 				return e.call(e.file(t, "m.xmind", e.fixture))
 			},
 			lock: chmodLock("m.xmind", 0o444, 0o644)},
+	}
+}
+
+// fieldShapeScenarios are the scenarios where a writing tool cannot save because the map holds a
+// value it could not decode in a field the tools edit.
+func fieldShapeScenarios() []contractScenario {
+	return []contractScenario{
+		{name: "wrong-shaped field", writesOnly: true,
+			want: "has an unexpected shape", createWant: "file already exists",
+			setup: func(t *testing.T, e contractEnv) map[string]any {
+				return e.call(e.file(t, "m.xmind", fixtureWithField(t, e.fixture, "r1", "labels", "x")))
+			}},
 	}
 }
 
@@ -636,7 +707,7 @@ func TestToolErrorContract(t *testing.T) {
 	s := newXMindServer(context.Background(), handler.NewXMindHandler())
 	fixture := contractFixture(t)
 	tools := s.ListTools()
-	scenarios := slices.Concat(pathScenarios(), accessScenarios(), readOnlyScenarios())
+	scenarios := slices.Concat(pathScenarios(), accessScenarios(), readOnlyScenarios(), fieldShapeScenarios())
 	for _, name := range slices.Sorted(maps.Keys(contractCases)) {
 		tc := contractCases[name]
 		writes := writesFile(tools[name])
@@ -645,5 +716,30 @@ func TestToolErrorContract(t *testing.T) {
 				runContractScenario(t, s, name, writes, contractEnv{dir: t.TempDir(), fixture: fixture, tc: tc}, sc)
 			})
 		}
+	}
+}
+
+// TestReadOnlyToolsReadWrongShapedField checks that every read-only tool still works on a map
+// holding a value it could not decode in a field the tools edit, and changes nothing: only
+// saves are refused (fieldShapeScenarios).
+func TestReadOnlyToolsReadWrongShapedField(t *testing.T) {
+	s := newXMindServer(context.Background(), handler.NewXMindHandler())
+	fixture := fixtureWithField(t, contractFixture(t), "r1", "labels", "x")
+	tools := s.ListTools()
+	for _, name := range slices.Sorted(maps.Keys(contractCases)) {
+		if writesFile(tools[name]) {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			e := contractEnv{dir: t.TempDir(), fixture: fixture, tc: contractCases[name]}
+			args := e.fixtureCall(t)
+			before := snapshotDir(t, e.dir)
+			resp := callContractTool(t, s, name, args)
+			result, _ := resp["result"].(map[string]any)
+			if isErr, _ := result["isError"].(bool); resp["error"] != nil || isErr {
+				t.Fatalf("read failed: %v", resp)
+			}
+			assertSameTree(t, before, snapshotDir(t, e.dir))
+		})
 	}
 }

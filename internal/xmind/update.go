@@ -25,6 +25,10 @@ type MapWriter struct {
 	unlock    func()
 	closed    bool
 	committed bool
+	// unsavable is checkSavable's result for the sheets as read: a map holding a value it
+	// could not decode in a field the tools edit refuses every Commit, even one whose sheets
+	// no longer hold that value.
+	unsavable error
 }
 
 // OpenMapForUpdate acquires the file's write lock, opens path once, parses content.json
@@ -57,7 +61,7 @@ func OpenMapForUpdate(path string) (sheets []Sheet, mw *MapWriter, err error) {
 	}
 
 	handedOff = true
-	return sheets, &MapWriter{target: target, file: f, zr: zr, unlock: unlock}, nil
+	return sheets, &MapWriter{target: target, file: f, zr: zr, unlock: unlock, unsavable: checkSavable(sheets)}, nil
 }
 
 // Commit serializes sheets back into the .xmind file, preserving every non-content.json
@@ -69,12 +73,20 @@ func OpenMapForUpdate(path string) (sheets []Sheet, mw *MapWriter, err error) {
 // Close to release. Commit is single-use: a second call, or a call after Close, returns an
 // error. Unlike Close, Commit is not nil-safe: OpenMapForUpdate always returns a non-nil
 // writer when its error is nil, so a correct caller never reaches here with a nil receiver.
+//
+// When the map as read held a value it could not decode in a field the tools edit, Commit
+// writes nothing and returns an error wrapping ErrUndecodableField, even if sheets no longer
+// hold that value: deleting the topic that holds it, or a change that drops it as a side
+// effect, must not lose it.
 func (mw *MapWriter) Commit(sheets []Sheet) error {
 	if mw.committed {
 		return fmt.Errorf("map already committed")
 	}
 	if mw.closed {
 		return fmt.Errorf("commit after close")
+	}
+	if mw.unsavable != nil {
+		return mw.unsavable
 	}
 
 	if err := writeMapBody(mw.target, sheets, mw.zr, func() error {

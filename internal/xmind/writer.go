@@ -192,12 +192,13 @@ func WriteMap(path string, sheets []Sheet) error {
 // (and before the atomic swap) so the caller can close the source handle that backs zr;
 // this lets the swap run with no open handle on the original. On any failure the temp
 // file is removed and the original is left untouched. The new file keeps the original's
-// permission bits. A dst with no write permission bits is refused with ErrMapReadOnly before
-// anything is written.
+// permission bits. A dst with no write permission bits is refused with ErrMapReadOnly, and
+// sheets holding a value that could not be decoded in a field the tools edit are refused with
+// ErrUndecodableField, both before anything is written.
 func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func() error) error {
-	data, err := marshalSheetsForContentJSON(sheets)
+	data, err := contentJSONToSave(sheets)
 	if err != nil {
-		return fmt.Errorf("marshal content.json: %w", err)
+		return err
 	}
 
 	perm, err := writableTargetPerm(dst)
@@ -243,6 +244,19 @@ func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func
 	}
 	swapped = true
 	return nil
+}
+
+// contentJSONToSave returns sheets as content.json, or, unwrapped, checkSavable's error when they
+// hold a value that could not be decoded in a field the tools edit.
+func contentJSONToSave(sheets []Sheet) ([]byte, error) {
+	if err := checkSavable(sheets); err != nil {
+		return nil, err
+	}
+	data, err := marshalSheetsForContentJSON(sheets)
+	if err != nil {
+		return nil, fmt.Errorf("marshal content.json: %w", err)
+	}
+	return data, nil
 }
 
 // writableTargetPerm returns the permission bits of the map file a write will replace, which

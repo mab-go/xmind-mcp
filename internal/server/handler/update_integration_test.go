@@ -3,13 +3,43 @@ package handler
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/mab-go/xmind-mcp/internal/xmind"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
+
+// writeContentJSONMap writes a map whose only entry is content.json, holding contentJSON, to a
+// new temp directory and returns its path.
+func writeContentJSONMap(t *testing.T, contentJSON string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "m.xmind")
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("content.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(contentJSON)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 // firstSheetID returns the ID of the first sheet in the map at path.
 func firstSheetID(t *testing.T, path string) string {
@@ -118,5 +148,55 @@ func TestIntegration_CommitPreservesZipEntries(t *testing.T) {
 	}
 	if after := zipEntryNamesAt(t, path); !slices.Equal(before, after) {
 		t.Fatalf("zip entry set changed:\nbefore: %v\nafter:  %v", before, after)
+	}
+}
+
+// TestIntegration_UndecodableFieldBlocksSavesOnly checks a map whose topic c2 has wrong-shaped
+// labels and notes, fields the tools edit. Reads, and calls that change nothing, still succeed.
+// Every call that would save is refused with a tool error naming the field, even one that
+// deletes c2. The file never changes.
+func TestIntegration_UndecodableFieldBlocksSavesOnly(t *testing.T) {
+	const content = `[{"id":"s1","class":"sheet","title":"S","rootTopic":{"id":"r","title":"R",
+		"children":{"attached":[{"id":"c1","title":"c1"},{"id":"c2","title":"c2","labels":"x","notes":[1]}]}}}]`
+	h := NewXMindHandler()
+	path := writeContentJSONMap(t, content)
+	before := readZipContentJSON(t, path)
+	refused := fmt.Sprintf("cannot save map at %s: Topic.labels on topic c2 has an unexpected shape; the map is unchanged", path)
+	for _, tc := range []struct {
+		name    string
+		fn      func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+		args    map[string]any
+		refused bool
+		absent  []string // keys a successful reply must not contain
+	}{
+		{"get_topic_properties", h.GetTopicProperties, map[string]any{"topic_id": "c2"}, false, []string{`"labels"`, `"notes"`}},
+		{"get_subtree", h.GetSubtree, map[string]any{}, false, nil},
+		{"rename to the same title", h.RenameTopic, map[string]any{"topic_id": "c1", "title": "c1"}, false, nil},
+		{"clear notes", h.SetTopicProperties, map[string]any{"topic_id": "c2", "notes": ""}, false, nil},
+		{"rename", h.RenameTopic, map[string]any{"topic_id": "c1", "title": "n"}, true, nil},
+		{"set labels", h.SetTopicProperties, map[string]any{"topic_id": "c2", "labels": []any{"a"}}, true, nil},
+		{"delete", h.DeleteTopic, map[string]any{"topic_id": "c2"}, true, nil},
+		{"duplicate", h.DuplicateTopic, map[string]any{"topic_id": "c2", "target_parent_id": "r"}, true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := maps.Clone(tc.args)
+			args["path"], args["sheet_id"] = path, "s1"
+			res := callTool(t, tc.fn, args)
+			text := textContent(t, res)
+			switch {
+			case tc.refused && (!res.IsError || text != refused):
+				t.Errorf("got %q, want the tool error %q", text, refused)
+			case !tc.refused && res.IsError:
+				t.Errorf("got the tool error %q, want success", text)
+			}
+			for _, key := range tc.absent {
+				if strings.Contains(text, key) {
+					t.Errorf("reply %s contains %s", text, key)
+				}
+			}
+			if after := readZipContentJSON(t, path); !bytes.Equal(after, before) {
+				t.Fatalf("content.json changed:\n%s", after)
+			}
+		})
 	}
 }

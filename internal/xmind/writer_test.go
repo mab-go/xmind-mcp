@@ -2,6 +2,7 @@ package xmind
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -536,18 +537,18 @@ func TestWritesRefuseReadOnlyFile(t *testing.T) {
 				if err := tc.write(t, dst); !errors.Is(err, ErrMapReadOnly) || !errors.Is(err, fs.ErrPermission) {
 					t.Errorf("write to a read-only map: err = %v, want ErrMapReadOnly, matching fs.ErrPermission", err)
 				}
-				assertReadOnlyMapUntouched(t, dst, before, mode)
+				assertMapUntouched(t, dst, before, mode)
 			})
 		}
 	}
 }
 
-// assertReadOnlyMapUntouched fails unless dst still has the content hash before and the given
-// mode, and no temp file was left beside it.
-func assertReadOnlyMapUntouched(t *testing.T, dst, before string, mode fs.FileMode) {
+// assertMapUntouched fails unless dst still has the content hash before and the given mode, and
+// no temp file was left beside it.
+func assertMapUntouched(t *testing.T, dst, before string, mode fs.FileMode) {
 	t.Helper()
 	if after := fileSHA256(t, dst); after != before {
-		t.Errorf("read-only map changed: before %s, after %s", before, after)
+		t.Errorf("map changed: before %s, after %s", before, after)
 	}
 	assertPerm(t, dst, mode)
 	ents, err := os.ReadDir(filepath.Dir(dst))
@@ -559,6 +560,139 @@ func assertReadOnlyMapUntouched(t *testing.T, dst, before string, mode fs.FileMo
 			t.Errorf("leaked temp file: %s", e.Name())
 		}
 	}
+}
+
+// TestWritesKeepUndecodableFields checks that both writes keep, unchanged, values a read could
+// not decode in fields no handler writes: on the sheet, the root topic, its note, a boundary and
+// a relationship.
+func TestWritesKeepUndecodableFields(t *testing.T) {
+	const content = `[{"id":"s1","class":"sheet","title":5,
+		"rootTopic":{"id":"r","class":5,"title":"R","position":"x","image":7,
+			"notes":{"plain":{"content":5}},
+			"boundaries":[{"id":"b1","range":"master","title":5}],
+			"children":{"attached":[{"id":"c","title":"C"}]}},
+		"relationships":[{"id":"rel","end1Id":7,"end2Id":"c","controlPoints":{"0":5}}]}]`
+	kept := []struct {
+		path []any
+		want string
+	}{
+		{[]any{0, "title"}, `5`},
+		{[]any{0, "rootTopic", "class"}, `5`},
+		{[]any{0, "rootTopic", "position"}, `"x"`},
+		{[]any{0, "rootTopic", "image"}, `7`},
+		{[]any{0, "rootTopic", "notes", "plain", "content"}, `5`},
+		{[]any{0, "rootTopic", "boundaries", 0, "title"}, `5`},
+		{[]any{0, "relationships", 0, "end1Id"}, `7`},
+		{[]any{0, "relationships", 0, "controlPoints"}, `{"0":5}`},
+	}
+	for _, tc := range mapWrites {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := writeContentJSONMap(t, content)
+			if err := tc.write(t, dst); err != nil {
+				t.Fatal(err)
+			}
+			saved := readContentJSON(t, dst)
+			for _, k := range kept {
+				if got := compactJSON(t, jsonAt(t, saved, k.path...)); got != k.want {
+					t.Errorf("%v = %s, want %s", k.path, got, k.want)
+				}
+			}
+		})
+	}
+}
+
+// TestWritesRefuseUndecodableStrictField checks that both writes refuse a map holding a value
+// that could not be decoded in a field the tools edit, and leave the map untouched. Commit
+// refuses even when the sheets it is given no longer hold that value, because the open recorded
+// it: a change that removes the topic must not drop the value with it.
+func TestWritesRefuseUndecodableStrictField(t *testing.T) {
+	const content = `[{"id":"s1","class":"sheet","title":"S","rootTopic":{"id":"r","title":"R",
+		"children":{"attached":[{"id":"c","title":"C","labels":"x"}]}}}]`
+	const want = "Topic.labels on topic c has an unexpected shape"
+	writes := append(slices.Clone(mapWrites), struct {
+		name  string
+		write func(t *testing.T, dst string) error
+	}{"Commit without the topic", func(t *testing.T, dst string) error {
+		sheets, mw, err := OpenMapForUpdate(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = mw.Close() }()
+		sheets[0].RootTopic.Children = nil
+		return mw.Commit(sheets)
+	}})
+	for _, tc := range writes {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := writeContentJSONMap(t, content)
+			st, err := os.Stat(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := fileSHA256(t, dst)
+			if err := tc.write(t, dst); !errors.Is(err, ErrUndecodableField) || err.Error() != want {
+				t.Errorf("write: err = %v, want %q matching ErrUndecodableField", err, want)
+			}
+			assertMapUntouched(t, dst, before, st.Mode().Perm())
+		})
+	}
+}
+
+// TestWriteMapRefusesSheetsThatDoNotMarshal checks that WriteMap fails, writing nothing, when the
+// sheets it is given can't be marshaled: here a theme that is not valid JSON, which a read never
+// produces but a caller building sheets could pass.
+func TestWriteMapRefusesSheetsThatDoNotMarshal(t *testing.T) {
+	dst := copyKitchenSink(t)
+	st, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheets, err := ReadMap(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheets[0].Theme = json.RawMessage(`{`)
+	before := fileSHA256(t, dst)
+	err = WriteMap(dst, sheets)
+	if err == nil || !strings.HasPrefix(err.Error(), "marshal content.json: ") || errors.Is(err, ErrUndecodableField) {
+		t.Errorf("write: err = %v, want a marshal content.json error", err)
+	}
+	assertMapUntouched(t, dst, before, st.Mode().Perm())
+}
+
+// jsonAt returns the JSON value at path in doc, where a string steps into an object's key and an
+// int into an array's index. It fails the test when the value is missing.
+func jsonAt(t *testing.T, doc []byte, path ...any) json.RawMessage {
+	t.Helper()
+	cur := json.RawMessage(doc)
+	for _, step := range path {
+		var ok bool
+		switch s := step.(type) {
+		case string:
+			var m map[string]json.RawMessage
+			_ = json.Unmarshal(cur, &m)
+			cur, ok = m[s]
+		case int:
+			var a []json.RawMessage
+			_ = json.Unmarshal(cur, &a)
+			if ok = s < len(a); ok {
+				cur = a[s]
+			}
+		}
+		if !ok {
+			t.Fatalf("%v: no value at %v", path, step)
+		}
+	}
+	return cur
+}
+
+// compactJSON returns raw with insignificant whitespace removed.
+func compactJSON(t *testing.T, raw []byte) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
 }
 
 func TestCreateNewMapUsesUmaskDefaultMode(t *testing.T) {
