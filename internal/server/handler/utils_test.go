@@ -462,8 +462,7 @@ func TestFlattenImportRoundTripDeepMarkdown(t *testing.T) {
 // TestFlattenImportRoundTripKitchenSinkMarkdown flattens each kitchen-sink sheet to Markdown,
 // imports that as a new sheet, and checks the new sheet has the same tree. The trees are compared
 // as text outlines, which indent by real depth: Markdown would hide depth lost past heading level
-// 6, because both flattens would lose it the same way. Trailing spaces are ignored, because import
-// trims titles.
+// 6, because both flattens would lose it the same way.
 func TestFlattenImportRoundTripKitchenSinkMarkdown(t *testing.T) {
 	h := NewXMindHandler()
 	path := copyFixture(t, kitchenSinkPath(t))
@@ -485,7 +484,7 @@ func TestFlattenImportRoundTripKitchenSinkMarkdown(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, got := trimLineEnds(flatten(t, sh.ID, "text")), trimLineEnds(flatten(t, after[len(after)-1].ID, "text"))
+			want, got := flatten(t, sh.ID, "text"), flatten(t, after[len(after)-1].ID, "text")
 			if got != want {
 				t.Fatalf("imported tree differs:\n--- original\n%s\n--- imported\n%s", want, got)
 			}
@@ -493,13 +492,42 @@ func TestFlattenImportRoundTripKitchenSinkMarkdown(t *testing.T) {
 	}
 }
 
-// trimLineEnds removes trailing spaces from every line of s.
-func trimLineEnds(s string) string {
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " ")
+// TestFlattenMultiLineTitle checks that a title with line breaks is written on one line, with a
+// space for each break and no whitespace at either end, so that import creates one topic in the
+// same place. In text format, whitespace before a title would read as extra indentation.
+func TestFlattenMultiLineTitle(t *testing.T) {
+	h := NewXMindHandler()
+	path := filepath.Join(t.TempDir(), "multiline.xmind")
+	callTool(t, h.CreateMap, map[string]any{"path": path, "root_title": "\n\nR"})
+	sheets, _ := xmind.ReadMap(path)
+	sid, rid := sheets[0].ID, sheets[0].RootTopic.ID
+	a := parseAddTopicResult(t, callTool(t, h.AddTopic, map[string]any{
+		"path": path, "sheet_id": sid, "parent_id": rid, "title": "line one\nline two\r\nline three",
+	})).ID
+	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": a, "title": "A child"})
+	callTool(t, h.AddTopic, map[string]any{"path": path, "sheet_id": sid, "parent_id": rid, "title": "\r\n\r\n B\t"})
+
+	for _, tc := range []struct{ format, want string }{
+		{"markdown", "# R\n\n## line one line two line three\n### A child\n## B"},
+		{"text", "R\n  line one line two line three\n    A child\n  B"},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			flatten := func(sheetID string) string {
+				return textContent(t, callTool(t, h.FlattenToOutline, map[string]any{"path": path, "sheet_id": sheetID, "format": tc.format}))
+			}
+			outline := flatten(sid)
+			if outline != tc.want {
+				t.Fatalf("%s outline:\n%s\nwant:\n%s", tc.format, outline, tc.want)
+			}
+			if res := callTool(t, h.ImportFromOutline, map[string]any{"path": path, "outline": outline}); res.IsError {
+				t.Fatal(textContent(t, res))
+			}
+			after, _ := xmind.ReadMap(path)
+			if imported := flatten(after[len(after)-1].ID); imported != outline {
+				t.Fatalf("imported tree differs:\n--- original\n%s\n--- imported\n%s", outline, imported)
+			}
+		})
 	}
-	return strings.Join(lines, "\n")
 }
 
 func TestParseOutlineToPairs(t *testing.T) {
@@ -673,22 +701,26 @@ func FuzzParseOutline(f *testing.F) {
 }
 
 // FuzzOutlineRoundTrip flattens a generated tree to Markdown, and to text when its titles allow,
-// and checks that parsing the outline rebuilds the same tree.
+// and checks that parsing the outline rebuilds the same tree, with each title on one line.
 func FuzzOutlineRoundTrip(f *testing.F) {
 	f.Add("R\x1fA\x1fB\x1fC", []byte{0, 0, 1, 0})
 	f.Add("R\x1fT1\x1fT2\x1fT3\x1fT4\x1fT5\x1fT6\x1fT7\x1fT8\x1fT9\x1fT8b", []byte{0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 7})
 	f.Add("# R\x1f- A\x1f[note] B\x1f\x1f> C", []byte{0, 0, 1, 2, 0})
+	f.Add("R\x1fline one\nline two\x1fA\r\nB\x1fC\rD", []byte{0, 0, 1, 0})
+	f.Add("\n\nR\x1f  A\x1f\r\n\r\nB \x1f\tC\x1f[note]x", []byte{0, 0, 1, 0, 1})
+	f.Add("R\x1f[note]\nsecret\x1fG\x1fB", []byte{0, 0, 1, 0})
 	f.Fuzz(func(t *testing.T, titles string, depths []byte) {
-		want := fuzzOutlineTree(titles, depths)
-		if want == nil {
+		tree := fuzzOutlineTree(titles, depths)
+		if tree == nil {
 			return
 		}
+		want := flattenedTitles(tree)
 		formats := []string{"markdown"}
 		if textOutlineSafe(want) {
 			formats = append(formats, "text")
 		}
 		for _, format := range formats {
-			topic := outlineNodeToTopics(want)
+			topic := outlineNodeToTopics(tree)
 			var b strings.Builder
 			flattenTopicWrite(&b, &topic, 0, format, false)
 			pairs := parseOutlineToPairs(b.String())
@@ -701,8 +733,8 @@ func FuzzOutlineRoundTrip(f *testing.F) {
 }
 
 // fuzzOutlineTree builds FuzzOutlineRoundTrip's tree: one node per "\x1f"-separated title (at most
-// 64, and no more than len(depths)), with newlines turned into spaces and the ends trimmed. Node 0
-// is the root, and node i sits at depth min(1+depths[i]%9, previous depth+1), so at most 9.
+// 64, and no more than len(depths)). Node 0 is the root, and node i sits at depth
+// min(1+depths[i]%9, previous depth+1), so at most 9.
 func fuzzOutlineTree(titles string, depths []byte) *outlineNode {
 	parts := strings.Split(titles, "\x1f")
 	n := min(len(parts), len(depths), 64)
@@ -711,7 +743,7 @@ func fuzzOutlineTree(titles string, depths []byte) *outlineNode {
 	}
 	var path []*outlineNode // the previous node and its ancestors
 	for i, part := range parts[:n] {
-		nd := &outlineNode{title: strings.TrimSpace(strings.ReplaceAll(part, "\n", " "))}
+		nd := &outlineNode{title: part}
 		if i > 0 {
 			depth := min(1+int(depths[i])%9, len(path))
 			path = path[:depth]
@@ -723,16 +755,25 @@ func fuzzOutlineTree(titles string, depths []byte) *outlineNode {
 	return path[0]
 }
 
+// flattenedTitles returns a copy of tree with each title as flatten writes it (see outlineTitle).
+func flattenedTitles(tree *outlineNode) *outlineNode {
+	out := &outlineNode{title: outlineTitle(tree.title)}
+	for _, c := range tree.children {
+		out.children = append(out.children, flattenedTitles(c))
+	}
+	return out
+}
+
 // textOutlineSafe reports whether the text outline format can carry root's tree. Import skips
-// empty lines and lines starting with "[note]", and reads the outline as Markdown when the root
-// title starts with "#", "-" or "*".
+// empty lines and note lines (those that are "[note]" or start with "[note] "), and reads the
+// outline as Markdown when the root title starts with "#", "-" or "*".
 func textOutlineSafe(root *outlineNode) bool {
 	if isMarkdownOutline(root.title) {
 		return false
 	}
 	var ok func(n *outlineNode) bool
 	ok = func(n *outlineNode) bool {
-		if n.title == "" || strings.HasPrefix(n.title, "[note]") {
+		if n.title == "" || n.title == "[note]" || strings.HasPrefix(n.title, "[note] ") {
 			return false
 		}
 		for _, c := range n.children {
