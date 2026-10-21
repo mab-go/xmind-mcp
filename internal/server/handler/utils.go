@@ -112,18 +112,25 @@ func flattenTopicWriteText(b *strings.Builder, title, plain string, depth int, h
 }
 
 func flattenTopicWriteMarkdown(b *strings.Builder, title, plain string, depth int, hasNotes bool) {
-	// Use heading lines at every depth so the output is unambiguous Markdown. Import also accepts list
-	// items and text under headings, and skips the "> " note lines written below.
-	level := depth + 1
-	if level > 6 {
-		level = 6
+	// Topics down to depth 5 are headings ("#" to "######"). Markdown has no deeper heading, so
+	// deeper topics are "- " list items, indented two spaces per level below depth 6; import nests
+	// them under the last heading. Note lines start with "> ", which import skips, and under a list
+	// item they are indented to stay inside it.
+	noteIndent := ""
+	if depth < 6 {
+		b.WriteString(strings.Repeat("#", depth+1))
+		b.WriteString(" ")
+	} else {
+		indent := strings.Repeat("  ", depth-6)
+		b.WriteString(indent)
+		b.WriteString("- ")
+		noteIndent = indent + "  "
 	}
-	b.WriteString(strings.Repeat("#", level))
-	b.WriteString(" ")
 	b.WriteString(title)
 	b.WriteByte('\n')
 	if hasNotes {
 		for _, line := range strings.Split(plain, "\n") {
+			b.WriteString(noteIndent)
 			b.WriteString("> ")
 			b.WriteString(line)
 			b.WriteByte('\n')
