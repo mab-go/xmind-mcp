@@ -143,11 +143,20 @@ func flattenTopicWriteMarkdown(b *strings.Builder, title, plain string, depth in
 	}
 }
 
+var outlineLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+
+// outlineTitle returns title as flatten writes it: on one line, with each line break as a space,
+// because each outline line is one topic; and with whitespace trimmed from both ends, because text
+// format would read leading whitespace as indentation (import trims titles anyway).
+func outlineTitle(title string) string {
+	return strings.TrimSpace(outlineLineBreaks.Replace(title))
+}
+
 func flattenTopicWrite(b *strings.Builder, t *xmind.Topic, depth int, format string, includeNotes bool) {
 	title := ""
 	plain := ""
 	if t != nil {
-		title = t.Title
+		title = outlineTitle(t.Title)
 		plain = plainNoteContent(t)
 	}
 	hasNotes := includeNotes && plain != ""

@@ -374,6 +374,9 @@ var toolFlattenToOutline = mcp.NewTool(
 	mcp.WithDescription(
 		"Export a topic subtree as indented plain text or Markdown (attached children only). "+
 			"Markdown uses headings down to level 6; deeper topics become nested '- ' list items. "+
+			"Line breaks in a title become spaces, and whitespace at either end is dropped. "+
+			"Text format can't carry an untitled topic or one titled '[note]' or starting with '[note] ': "+
+			"xmind_import_from_outline skips those lines as blank or note lines. Markdown keeps both. "+
 			"Optional include_notes appends plain-text note lines below each topic: Markdown uses blockquotes (>), "+
 			"plain text uses indented [note] lines.",
 	),
