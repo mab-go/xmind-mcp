@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2613,6 +2614,54 @@ func TestParseSummaryRange(t *testing.T) {
 			t.Errorf("parseSummaryRange(%q) = (%d,%d,%v), want (%d,%d,%v)",
 				c.in, from, to, ok, c.from, c.to, c.ok)
 		}
+	}
+}
+
+// TestNonNegativeIntValue checks which whole-number arguments are accepted and the message for
+// each one that is refused. The bound cases assume a 64-bit int, which every release target has.
+func TestNonNegativeIntValue(t *testing.T) {
+	limit := -float64(math.MinInt) // 2^63
+	cases := []struct {
+		name string
+		raw  any
+		want int
+		msg  string // reason in the tool error; empty when the value is accepted
+	}{
+		{"zero", 0.0, 0, ""},
+		{"whole float", 3.0, 3, ""},
+		{"int", 7, 7, ""},
+		{"negative zero", math.Copysign(0, -1), 0, ""},
+		{"largest float below 2^63", math.Nextafter(limit, 0), math.MaxInt - 1023, ""},
+		{"2^63", limit, 0, "too large"},
+		{"1e19", 1e19, 0, "too large"},
+		{"+Inf", math.Inf(1), 0, "must be a finite number"},
+		{"-Inf", math.Inf(-1), 0, "must be a finite number"},
+		{"NaN", math.NaN(), 0, "must be a finite number"},
+		{"-0.5", -0.5, 0, "must be a whole number"},
+		{"0.5", 0.5, 0, "must be a whole number"},
+		{"-1", -1.0, 0, "must be non-negative"},
+		{"negative int", -1, 0, "must be non-negative"},
+		{"string", "1", 0, "expected a number"},
+		{"bool", true, 0, "expected a number"},
+		{"null", nil, 0, "expected a number"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, terr := nonNegativeIntValue(tc.raw, "n")
+			if tc.msg != "" {
+				want := "invalid argument n: " + tc.msg
+				if terr == nil || textContent(t, terr) != want {
+					t.Fatalf("nonNegativeIntValue(%v) = %d, %v; want tool error %q", tc.raw, got, terr, want)
+				}
+				return
+			}
+			if terr != nil {
+				t.Fatalf("nonNegativeIntValue(%v): unexpected tool error %q", tc.raw, textContent(t, terr))
+			}
+			if got != tc.want {
+				t.Fatalf("nonNegativeIntValue(%v) = %d, want %d", tc.raw, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -328,35 +328,6 @@ func ensureChildren(t *xmind.Topic) *xmind.Children {
 	return t.Children
 }
 
-// parsePositionOptional parses optional JSON number as non-negative int index for sibling insert.
-func parsePositionOptional(raw any) (*int, *mcp.CallToolResult) {
-	if raw == nil {
-		return nil, nil
-	}
-	switch v := raw.(type) {
-	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return nil, mcp.NewToolResultError("invalid argument position: must be a finite number")
-		}
-		if v < 0 {
-			return nil, mcp.NewToolResultError("invalid argument position: must be non-negative")
-		}
-		trunc := math.Trunc(v)
-		if trunc != v {
-			return nil, mcp.NewToolResultError("invalid argument position: must be a whole number")
-		}
-		p := int(trunc)
-		return &p, nil
-	case int:
-		if v < 0 {
-			return nil, mcp.NewToolResultError("invalid argument position: must be non-negative")
-		}
-		return &v, nil
-	default:
-		return nil, mcp.NewToolResultError("invalid argument position: expected a number")
-	}
-}
-
 func insertAttached(parent *xmind.Topic, topic xmind.Topic, pos *int) *mcp.CallToolResult {
 	ch := ensureChildren(parent)
 	if pos == nil {
@@ -461,7 +432,7 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 		return terr, nil
 	}
 	sheetID, parentID, title := parts[0], parts[1], parts[2]
-	pos, perr := parsePositionOptional(args["position"])
+	pos, perr := optionalNonNegativeInt(args, "position")
 	if perr != nil {
 		return perr, nil
 	}
@@ -510,7 +481,7 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 		return terr, nil
 	}
 	sheetID, topicID, targetParentID := parts[0], parts[1], parts[2]
-	pos, perr := parsePositionOptional(args["position"])
+	pos, perr := optionalNonNegativeInt(args, "position")
 	if perr != nil {
 		return perr, nil
 	}
@@ -794,7 +765,7 @@ func moveTopicFromArgs(args map[string]any) (absPath, sheetID, topicID, newParen
 	if toolErr != nil {
 		return absPath, sheetID, topicID, "", nil, toolErr
 	}
-	pos, perr := parsePositionOptional(args["position"])
+	pos, perr := optionalNonNegativeInt(args, "position")
 	if perr != nil {
 		return absPath, sheetID, topicID, newParentID, nil, perr
 	}
@@ -1685,32 +1656,57 @@ func optionalStringArg(args map[string]any, key string) (string, *mcp.CallToolRe
 	return s, nil
 }
 
+// requireNonNegativeInt reads a required whole-number argument (see nonNegativeIntValue).
 func requireNonNegativeInt(args map[string]any, key string) (int, *mcp.CallToolResult) {
 	v, ok := args[key]
 	if !ok {
 		return 0, mcp.NewToolResultError("missing required argument: " + key)
 	}
-	switch n := v.(type) {
+	return nonNegativeIntValue(v, key)
+}
+
+// optionalNonNegativeInt reads an optional whole-number argument (see nonNegativeIntValue). An
+// absent key or null gives nil.
+func optionalNonNegativeInt(args map[string]any, key string) (*int, *mcp.CallToolResult) {
+	v := args[key]
+	if v == nil {
+		return nil, nil
+	}
+	n, terr := nonNegativeIntValue(v, key)
+	if terr != nil {
+		return nil, terr
+	}
+	return &n, nil
+}
+
+// nonNegativeIntValue converts a whole-number argument to int. JSON numbers arrive as float64, so
+// the value must be finite, whole, non-negative and below -float64(math.MinInt) (2^63 on 64-bit).
+// That bound is checked before the conversion, because converting a larger float64 to int gives a
+// CPU-dependent result.
+func nonNegativeIntValue(raw any, key string) (int, *mcp.CallToolResult) {
+	invalid := func(reason string) (int, *mcp.CallToolResult) {
+		return 0, mcp.NewToolResultError("invalid argument " + key + ": " + reason)
+	}
+	switch n := raw.(type) {
 	case float64:
-		if math.IsNaN(n) || math.IsInf(n, 0) {
-			return 0, mcp.NewToolResultError("invalid argument " + key + ": must be a finite number")
+		switch {
+		case math.IsNaN(n) || math.IsInf(n, 0):
+			return invalid("must be a finite number")
+		case math.Trunc(n) != n:
+			return invalid("must be a whole number")
+		case n < 0:
+			return invalid("must be non-negative")
+		case n >= -float64(math.MinInt):
+			return invalid("too large")
 		}
-		trunc := math.Trunc(n)
-		if trunc != n {
-			return 0, mcp.NewToolResultError("invalid argument " + key + ": must be a whole number")
-		}
-		i := int(trunc)
-		if i < 0 {
-			return 0, mcp.NewToolResultError("invalid argument " + key + ": must be non-negative")
-		}
-		return i, nil
+		return int(n), nil
 	case int:
 		if n < 0 {
-			return 0, mcp.NewToolResultError("invalid argument " + key + ": must be non-negative")
+			return invalid("must be non-negative")
 		}
 		return n, nil
 	default:
-		return 0, mcp.NewToolResultError("invalid argument " + key + ": expected a number")
+		return invalid("expected a number")
 	}
 }
 

@@ -35,7 +35,7 @@ internal/
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints, and that whole-number parameters are declared as non-negative integers
     output_schema_test.go — asserts which tools declare an outputSchema and that their structured output matches it
-    error_contract_test.go — calls every tool with bad paths, bad IDs, unreachable paths and read-only maps; each must return a tool error and change nothing on disk
+    error_contract_test.go — calls every tool with bad paths, bad IDs, bad numbers, unreachable paths and read-only maps; each must return a tool error and change nothing on disk
     hooks.go              — MCP lifecycle hooks (initialize and server/discover)
     recovery.go           — tool-handler middleware: recovers panics, logs tool.panic with a stack trace
     instructions.go       — server instructions sent in the initialize and server/discover results
@@ -186,11 +186,11 @@ Every tool must declare its display title and MCP behavior hints with `withAnnot
 | `effectDestructive` | may change or remove existing content, and a repeat call can change it again |
 | `effectDestructiveIdempotent` | may change or remove existing content, and a repeat call has no further effect (renames, sets, deletes) |
 
-`openWorldHint` is always `false`: every tool touches only the local file named by `path`. The `toolEffect` zero value is invalid and an unknown effect makes `withAnnotations` panic; since tools are package-level vars, that fails every test in the package and stops the binary at startup. When adding an effect, add a `case` for it. Add each new tool to `expectedAnnotations` in `internal/server/tools_test.go`; the test fails for any registered tool missing from that table. Also add it to `contractCases` in `internal/server/error_contract_test.go`, with base arguments that succeed on that test's fixture map and the names of its ID arguments; `TestToolErrorContractCoversAllTools` fails for any registered tool missing from that table, and `TestToolErrorContract` then checks the new tool returns tool errors, never protocol errors or writes, for bad paths, bad IDs, unreachable paths and read-only maps.
+`openWorldHint` is always `false`: every tool touches only the local file named by `path`. The `toolEffect` zero value is invalid and an unknown effect makes `withAnnotations` panic; since tools are package-level vars, that fails every test in the package and stops the binary at startup. When adding an effect, add a `case` for it. Add each new tool to `expectedAnnotations` in `internal/server/tools_test.go`; the test fails for any registered tool missing from that table. Also add it to `contractCases` in `internal/server/error_contract_test.go`, with base arguments that succeed on that test's fixture map and the names of its ID arguments; `TestToolErrorContractCoversAllTools` fails for any registered tool missing from that table, and `TestToolErrorContract` then checks the new tool returns tool errors, never protocol errors or writes, for bad paths, bad IDs, bad numbers, unreachable paths and read-only maps. It finds a tool's integer parameters in its input schema, so a new one is tested without editing the table.
 
 A tool whose handler returns `jsonResult` must also declare its output schema with `handler.OutputSchema[handler.<Type>]()`, right after `withAnnotations`. `<Type>` is the exported struct the handler passes to `jsonResult` (e.g. `handler.OpenMapResponse`). Add the tool to `jsonOutputTools` in `internal/server/output_schema_test.go`, and add cases to `TestStructuredOutputMatchesSchema` that cover each success return path. Clients may check results against the schema, so a wrong schema on a writing tool can look like a failure after the file was saved. `OutputSchema` builds the schema with `jsonschema.For`, which requires fields without `omitempty` and rejects keys the struct does not name. A recursive type, or a type with custom JSON (like `xmind.Marker`, which writes back unknown keys), needs an entry in `outputTypeSchemas` in `handler/schema.go`. Like `withAnnotations`, `OutputSchema` panics on a schema error.
 
-Declare a parameter that must be a whole number (an index, depth, or count) with `mcp.WithInteger(..., mcp.Min(0))`, never `mcp.WithNumber`, so the schema tells the model up front. Still parse it with `requireNonNegativeInt` or an equivalent whole-number check: the server does not validate input against the schema, and JSON numbers arrive as `float64`. Add the parameter to `nonNegativeIntParams` in `internal/server/tools_test.go`; the test fails for any number or integer parameter missing from that table. A signed or fractional parameter would need the test extended.
+Declare a parameter that must be a whole number (an index, depth, or count) with `mcp.WithInteger(..., mcp.Min(0))`, never `mcp.WithNumber`, so the schema tells the model up front. Still parse it with `requireNonNegativeInt` or `optionalNonNegativeInt`: the server does not validate input against the schema, and JSON numbers arrive as `float64`, so they reject a fraction, a negative number, or one too large for an `int` (converting that would wrap differently on each CPU). Add the parameter to `nonNegativeIntParams` in `internal/server/tools_test.go`; the test fails for any number or integer parameter missing from that table. A signed or fractional parameter would need the test extended.
 
 Register them in `server.go`:
 
@@ -274,7 +274,8 @@ For additional non-path arguments, use the shared extraction helpers rather than
 |---|---|---|
 | `requireString(args, key)` | `mutate.go` | Required string; rejects missing, non-string, and empty. |
 | `stringArgAllowEmpty(args, key)` | `utils.go` | Required string; rejects missing and non-string, but permits empty. |
-| `requireNonNegativeInt(args, key)` | `mutate.go` | Required whole number ≥ 0 (accepts JSON `float64` or `int`). |
+| `requireNonNegativeInt(args, key)` | `mutate.go` | Required whole number ≥ 0 that fits in an `int` (accepts JSON `float64` or `int`). |
+| `optionalNonNegativeInt(args, key)` | `mutate.go` | Optional whole number with the same checks → `*int`; nil when absent/null. |
 | `optionalString(args, key)` | `handler.go` | Optional string → `(val, present, toolErr)`. `present=false` when absent/null; errors only on a non-string value; empty string is returned as-is for the caller to interpret (default vs. reject). |
 
 ```go
