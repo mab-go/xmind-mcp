@@ -3,8 +3,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/mab-go/logging"
 	"github.com/mab-go/xmind-mcp/internal/server/handler"
@@ -76,27 +80,32 @@ func newXMindServer(ctx context.Context, h *handler.XMindHandler) *mcpserver.MCP
 	return s
 }
 
-// RunStdioServer starts the MCP server and serves requests via stdio.
+// RunStdioServer serves MCP over the process's stdin and stdout. It returns nil when stdin
+// closes or the process gets an interrupt or SIGTERM.
 func RunStdioServer() error {
 	log := logging.NewDefaultLogger()
 	ctx := logging.NewContext(context.Background(), log)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	h := handler.NewXMindHandler()
+	return serveStdio(ctx, handler.NewXMindHandler(), os.Stdin, os.Stdout)
+}
 
-	shutdown := func() {
-		log.Info(eventServerStopped)
-	}
-	defer shutdown()
+// serveStdio serves MCP for h, reading requests from in and writing responses to out, until in
+// reaches EOF or ctx is cancelled; both are a clean stop and return nil. newXMindServer and
+// every request get ctx, so hooks and tool handlers log through its logger.
+func serveStdio(ctx context.Context, h *handler.XMindHandler, in io.Reader, out io.Writer) error {
+	log, _ := logging.FromContext(ctx)
+	defer log.Info(eventServerStopped)
 
 	srv := newXMindServer(ctx, h)
 
 	log.WithField("transport", "stdio").Info(eventServerReady)
 
-	if err := mcpserver.ServeStdio(srv); err != nil {
-		if err != context.Canceled && err != io.EOF {
-			log.WithError(err).Error(eventServerError)
-			return fmt.Errorf("failed to start stdio MCP server: %w", err)
-		}
+	// Listen returns nil at EOF and context.Canceled once ctx is cancelled.
+	if err := mcpserver.NewStdioServer(srv).Listen(ctx, in, out); err != nil && !errors.Is(err, context.Canceled) {
+		log.WithError(err).Error(eventServerError)
+		return fmt.Errorf("failed to start stdio MCP server: %w", err)
 	}
 
 	log.Info(eventServerStopping)

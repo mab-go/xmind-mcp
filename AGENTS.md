@@ -30,8 +30,9 @@ cmd/
     main.go               — dev utility; generates the README example map via xmind package directly
 internal/
   server/
-    server.go             — MCP server setup and tool registration
+    server.go             — MCP server setup and tool registration; RunStdioServer (stdin/stdout, interrupt and SIGTERM) and serveStdio, the serve loop it runs
     server_test.go        — asserts server capabilities (no MCP logging), server info, instructions, server/discover, lifecycle hook logging, and panic recovery
+    stdio_test.go         — serveStdio over in-memory pipes: initialize and a tool call, a clean stop at stdin EOF and on cancel, a read error logged as server.error
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints, and that whole-number parameters are declared as non-negative integers
     output_schema_test.go — asserts which tools declare an outputSchema and that their structured output matches it
@@ -372,6 +373,12 @@ with the `--log-level` flag or the `XMIND_MCP_LOG_LEVEL` env var
 (`debug`/`info`/`warn`/`error`); `parseLogLevel` in `main.go` rejects unknown
 values. Reserve `Info` for events visible at the default level (e.g.
 `server.ready`, `server.stopped`); keep routine per-connection detail at `Debug`.
+`server.stopping` then `server.stopped` mark a clean stop: stdin closed, or an
+interrupt or SIGTERM arrived (`RunStdioServer` turns those into a cancelled
+context for `serveStdio`). An error that ends the session, such as a failed
+stdin read, logs `server.error` instead of `server.stopping`. `serveStdio`
+passes its context to mcp-go, so tool handlers get the server's logger from
+`logging.FromContext(ctx)`.
 The lifecycle hooks (`hooks.go`) log the client name and protocol version at
 `Debug`: `server.starting`/`server.started` on `initialize` (protocol 2025-11-25
 and earlier) and `server.discovering`/`server.discovered` on `server/discover`.
