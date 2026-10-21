@@ -384,6 +384,9 @@ make build test lint
 
 # Run the server locally (stdio MCP)
 make run
+
+# Fuzz the parsers, 30s per target (override: FUZZTIME=2m)
+make fuzz
 ```
 
 The primary test fixture is located at `testdata/kitchen-sink.xmind`. It

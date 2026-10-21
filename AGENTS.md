@@ -51,9 +51,9 @@ internal/
       find.go             — handlers for Tier 2: search/find tools
       find_test.go        — tests for the Tier 2 handlers
       mutate.go           — handlers for Tier 3: topic mutation tools
-      mutate_test.go      — tests for the Tier 3 handlers, including idempotent-repeat and concurrent-write tests
+      mutate_test.go      — tests for the Tier 3 handlers, including idempotent-repeat and concurrent-write tests; number, range and note-HTML fuzz targets
       utils.go            — handlers for Tier 4: utility tools
-      utils_test.go       — tests for the Tier 4 handlers, including outline round trips and find-and-replace
+      utils_test.go       — tests for the Tier 4 handlers, including outline round trips and find-and-replace; outline parser tests and fuzz targets
       integration_test.go — multi-tool workflows and edge cases (find then mutate, build from scratch, fixture preservation, Unicode)
       update_integration_test.go — MapWriter paths through the handlers (no-match close, post-open tool errors, zip-entry preservation)
       testhelpers_test.go — TestMain (fails fast if the fixture is a Git LFS stub) and copyFixture
@@ -412,6 +412,10 @@ github.com/spf13/viper
 `github.com/google/jsonschema-go` generates tool output schemas (`handler/schema.go`) and `github.com/santhosh-tekuri/jsonschema/v6` validates tool output in tests only. mcp-go already requires both, so keep them at the versions it requires.
 
 For zip and JSON handling, use Go stdlib only: `archive/zip` and `encoding/json`.
+
+### Fuzz targets
+
+The pure parsers and converters (whole-number arguments, summary ranges, note HTML, outline parsing, and the outline flatten/import round trip) have Go fuzz targets (`FuzzXxx`), each in the `_test.go` file next to its function's unit tests. A target states a property that must hold for every input, not one expected output. Its `f.Add` seeds run under plain `go test`, so CI runs them; fuzzing itself is local only. `make fuzz` runs every target in turn for `FUZZTIME` (default 30s; e.g. `make fuzz FUZZTIME=2m`). Run it after changing a function that has a target. When fuzzing finds a failure, Go saves the input under `<package>/testdata/fuzz/<FuzzName>/`; commit that file with the fix so it stays as a regression seed, and add the directory to Project Structure.
 
 ### Verification before you finish
 

@@ -30,12 +30,13 @@ LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) \
            -X $(VERSION_PKG).Date=$(DATE)
 
 RACE ?= 1
+FUZZTIME ?= 30s
 OPEN ?= $(shell command -v xdg-open 2>/dev/null || echo "open")
 
 .PHONY: help \
         setup \
         build install run gen-example \
-        test test\:cover \
+        test test\:cover fuzz \
         lint lint\:fix fmt vet cyclo \
         mod\:tidy mod\:verify \
         clean clean\:cache clean\:all \
@@ -117,6 +118,15 @@ test\:cover: ## Coverage report; opens HTML unless CI is set (override OPEN=...)
 	go test $(if $(filter 1,$(RACE)),-race,) -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
 	go tool cover -html=coverage.out -o coverage.html
 	@if [ -z "$$CI" ]; then $(OPEN) coverage.html; else echo "Wrote coverage.html (CI set, skipping browser)"; fi
+
+fuzz: ## Run every fuzz target for FUZZTIME (default 30s)
+	@# Each list goes into a variable first: set -e ignores a failure inside a for loop's word list.
+	@set -e; pkgs=$$(go list ./...); for pkg in $$pkgs; do \
+	  list=$$(go test -list '^Fuzz' $$pkg); \
+	  for name in $$(printf '%s\n' "$$list" | grep '^Fuzz'); do \
+	    go test -run='^$$' -fuzz="^$$name$$" -fuzztime=$(FUZZTIME) $$pkg; \
+	  done; \
+	done
 
 #------------------------------------------------------------------------------
 # Lint and Format

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -499,6 +500,249 @@ func trimLineEnds(s string) string {
 		lines[i] = strings.TrimRight(line, " ")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func TestParseOutlineToPairs(t *testing.T) {
+	for _, tc := range []struct {
+		name, outline string
+		want          []outlinePair
+	}{
+		{"empty", "", nil},
+		{"blank lines only", "\n  \n\t\n", nil},
+		{"plain text", "R\n  A\n    B\n  C", []outlinePair{{0, "R"}, {1, "A"}, {2, "B"}, {1, "C"}}},
+		{"plain skips note lines", "R\n    [note] n\n  A\n      [note]", []outlinePair{{0, "R"}, {1, "A"}}},
+		{"tab counts as two spaces", "R\n\tA\n\t\tB", []outlinePair{{0, "R"}, {1, "A"}, {2, "B"}}},
+		{"leading blank lines", "\n\n# R\n## A", []outlinePair{{0, "R"}, {1, "A"}}},
+		{
+			"markdown headings and list items", "# R\n\n## A\n- x\n  - y\n## B\n* z",
+			[]outlinePair{{0, "R"}, {1, "A"}, {2, "x"}, {3, "y"}, {1, "B"}, {2, "z"}},
+		},
+		{"markdown skips quote lines", "# R\n> note\n  > indented\n## A", []outlinePair{{0, "R"}, {1, "A"}}},
+		{"markdown list without headings", "- R\n  - A\n- S", []outlinePair{{0, "R"}, {1, "A"}, {0, "S"}}},
+		{"text line under a heading", "# R\nplain", []outlinePair{{0, "R"}, {1, "plain"}}},
+		{"lone list marker", "# R\n-", []outlinePair{{0, "R"}, {1, ""}}},
+		{"heading without a space", "##A", []outlinePair{{1, "A"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseOutlineToPairs(tc.outline); !slices.Equal(got, tc.want) {
+				t.Fatalf("parseOutlineToPairs(%q) = %v, want %v", tc.outline, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCountLeadingSpaceTabs(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int
+	}{
+		{"", 0}, {"x", 0}, {"  x", 2}, {"\tx", 2}, {" \t x", 4}, {"   ", 3}, {"\t\t", 4},
+	} {
+		if got := countLeadingSpaceTabs(tc.in); got != tc.want {
+			t.Errorf("countLeadingSpaceTabs(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestNormalizeOutlineDepths(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		in, want []int
+	}{
+		{"empty", nil, nil},
+		{"minimum already 0", []int{0, 1, 2, 1}, []int{0, 1, 2, 1}},
+		{"shifted to 0", []int{2, 3, 2}, []int{0, 1, 0}},
+		{"minimum not first", []int{3, 1, 2}, []int{2, 0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var pairs []outlinePair
+			for _, d := range tc.in {
+				pairs = append(pairs, outlinePair{depth: d})
+			}
+			normalizeOutlineDepths(pairs)
+			var got []int
+			for _, p := range pairs {
+				got = append(got, p.depth)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("normalized depths %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// node builds an outlineNode for the outline tests; a leaf has nil children, as
+// buildOutlineForest leaves it.
+func node(title string, children ...*outlineNode) *outlineNode {
+	return &outlineNode{title: title, children: children}
+}
+
+func TestBuildOutlineForest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		pairs []outlinePair
+		want  []*outlineNode
+	}{
+		{"empty", nil, []*outlineNode{}},
+		{
+			"one tree", []outlinePair{{0, "R"}, {1, "A"}, {2, "B"}, {1, "C"}},
+			[]*outlineNode{node("R", node("A", node("B")), node("C"))},
+		},
+		{"skipped level", []outlinePair{{0, "R"}, {2, "A"}}, []*outlineNode{node("R", node("A"))}},
+		{
+			"back up several levels", []outlinePair{{0, "R"}, {1, "A"}, {2, "B"}, {3, "C"}, {1, "D"}},
+			[]*outlineNode{node("R", node("A", node("B", node("C"))), node("D"))},
+		},
+		{"several roots", []outlinePair{{0, "R"}, {1, "A"}, {0, "S"}}, []*outlineNode{node("R", node("A")), node("S")}},
+		{
+			"first depth above 0", []outlinePair{{2, "R"}, {1, "A"}, {0, "S"}},
+			[]*outlineNode{node("R", node("A")), node("S")},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := buildOutlineForest(tc.pairs); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("buildOutlineForest(%v) = %s, want %s", tc.pairs, formatForest(got), formatForest(tc.want))
+			}
+		})
+	}
+}
+
+// formatForest writes a forest as R(A(B),C) for test failure messages.
+func formatForest(forest []*outlineNode) string {
+	var b strings.Builder
+	for i, n := range forest {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(n.title)
+		if len(n.children) > 0 {
+			b.WriteString("(" + formatForest(n.children) + ")")
+		}
+	}
+	return b.String()
+}
+
+func TestFirstNonEmptyLineIndex(t *testing.T) {
+	for _, tc := range []struct {
+		lines  []string
+		idx    int
+		wantOK bool
+	}{
+		{nil, 0, false},
+		{[]string{"", " ", "\t"}, 0, false},
+		{[]string{"", "  x"}, 1, true},
+		{[]string{"a", ""}, 0, true},
+	} {
+		if idx, ok := firstNonEmptyLineIndex(tc.lines); idx != tc.idx || ok != tc.wantOK {
+			t.Errorf("firstNonEmptyLineIndex(%q) = (%d, %v), want (%d, %v)", tc.lines, idx, ok, tc.idx, tc.wantOK)
+		}
+	}
+}
+
+// FuzzParseOutline checks that any outline parses into a forest without panicking, with no
+// negative depth after normalizing, and with every parsed line as one node, in order.
+func FuzzParseOutline(f *testing.F) {
+	for _, s := range []string{"", "# R\n## A\n- x\n  - y\n> note", "R\n  A\n\tB\n    [note] n", "- a\n    - b\n- c", "  x\n y\n#", "###### T5\n- T6\n  - T7"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		pairs := parseOutlineToPairs(s)
+		normalizeOutlineDepths(pairs)
+		want := make([]string, 0, len(pairs))
+		for _, p := range pairs {
+			if p.depth < 0 {
+				t.Fatalf("negative depth after normalizing: %v", pairs)
+			}
+			want = append(want, p.title)
+		}
+		var got []string
+		var walk func(n *outlineNode)
+		walk = func(n *outlineNode) {
+			got = append(got, n.title)
+			for _, c := range n.children {
+				walk(c)
+			}
+		}
+		for _, root := range buildOutlineForest(pairs) {
+			walk(root)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("forest titles %q, want %q", got, want)
+		}
+	})
+}
+
+// FuzzOutlineRoundTrip flattens a generated tree to Markdown, and to text when its titles allow,
+// and checks that parsing the outline rebuilds the same tree.
+func FuzzOutlineRoundTrip(f *testing.F) {
+	f.Add("R\x1fA\x1fB\x1fC", []byte{0, 0, 1, 0})
+	f.Add("R\x1fT1\x1fT2\x1fT3\x1fT4\x1fT5\x1fT6\x1fT7\x1fT8\x1fT9\x1fT8b", []byte{0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 7})
+	f.Add("# R\x1f- A\x1f[note] B\x1f\x1f> C", []byte{0, 0, 1, 2, 0})
+	f.Fuzz(func(t *testing.T, titles string, depths []byte) {
+		want := fuzzOutlineTree(titles, depths)
+		if want == nil {
+			return
+		}
+		formats := []string{"markdown"}
+		if textOutlineSafe(want) {
+			formats = append(formats, "text")
+		}
+		for _, format := range formats {
+			topic := outlineNodeToTopics(want)
+			var b strings.Builder
+			flattenTopicWrite(&b, &topic, 0, format, false)
+			pairs := parseOutlineToPairs(b.String())
+			normalizeOutlineDepths(pairs)
+			if got := buildOutlineForest(pairs); len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+				t.Fatalf("%s round trip of %s gave %s:\n%s", format, formatForest([]*outlineNode{want}), formatForest(got), b.String())
+			}
+		}
+	})
+}
+
+// fuzzOutlineTree builds FuzzOutlineRoundTrip's tree: one node per "\x1f"-separated title (at most
+// 64, and no more than len(depths)), with newlines turned into spaces and the ends trimmed. Node 0
+// is the root, and node i sits at depth min(1+depths[i]%9, previous depth+1), so at most 9.
+func fuzzOutlineTree(titles string, depths []byte) *outlineNode {
+	parts := strings.Split(titles, "\x1f")
+	n := min(len(parts), len(depths), 64)
+	if n == 0 {
+		return nil
+	}
+	var path []*outlineNode // the previous node and its ancestors
+	for i, part := range parts[:n] {
+		nd := &outlineNode{title: strings.TrimSpace(strings.ReplaceAll(part, "\n", " "))}
+		if i > 0 {
+			depth := min(1+int(depths[i])%9, len(path))
+			path = path[:depth]
+			parent := path[depth-1]
+			parent.children = append(parent.children, nd)
+		}
+		path = append(path, nd)
+	}
+	return path[0]
+}
+
+// textOutlineSafe reports whether the text outline format can carry root's tree. Import skips
+// empty lines and lines starting with "[note]", and reads the outline as Markdown when the root
+// title starts with "#", "-" or "*".
+func textOutlineSafe(root *outlineNode) bool {
+	if isMarkdownOutline(root.title) {
+		return false
+	}
+	var ok func(n *outlineNode) bool
+	ok = func(n *outlineNode) bool {
+		if n.title == "" || strings.HasPrefix(n.title, "[note]") {
+			return false
+		}
+		for _, c := range n.children {
+			if !ok(c) {
+				return false
+			}
+		}
+		return true
+	}
+	return ok(root)
 }
 
 func TestFindAndReplaceEmptyFind(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"math"
 	"os"
@@ -2617,6 +2618,27 @@ func TestParseSummaryRange(t *testing.T) {
 	}
 }
 
+// FuzzParseSummaryRange checks that any range parseSummaryRange accepts is a valid range that
+// formatSummaryRange writes back in a form that parses to the same bounds.
+func FuzzParseSummaryRange(f *testing.F) {
+	for _, s := range []string{"(0,2)", " ( 1 , 3 ) ", "(2,2)", "", "[0,2]", "(0123)", "(a,2)", "(2,0)", "(-1,2)", "(+1,2)", "(007,9223372036854775807)"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		from, to, ok := parseSummaryRange(s)
+		if !ok {
+			return
+		}
+		if from < 0 || from > to {
+			t.Fatalf("parseSummaryRange(%q) accepted (%d,%d)", s, from, to)
+		}
+		r := formatSummaryRange(from, to)
+		if from2, to2, ok2 := parseSummaryRange(r); !ok2 || from2 != from || to2 != to {
+			t.Fatalf("parseSummaryRange(%q) = (%d,%d), but %q parses to (%d,%d,%v)", s, from, to, r, from2, to2, ok2)
+		}
+	})
+}
+
 // TestNonNegativeIntValue checks which whole-number arguments are accepted and the message for
 // each one that is refused. The bound cases assume a 64-bit int, which every release target has.
 func TestNonNegativeIntValue(t *testing.T) {
@@ -2663,6 +2685,64 @@ func TestNonNegativeIntValue(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzNonNegativeIntValue checks that a float64 argument is accepted exactly when it is finite,
+// whole, and in [0, 2^63), and that an accepted value converts to the same number.
+func FuzzNonNegativeIntValue(f *testing.F) {
+	limit := -float64(math.MinInt)
+	for _, v := range []float64{0, 1, -1, 0.5, -0.5, 1e19, limit, math.Nextafter(limit, 0), math.Inf(1), math.NaN(), math.Copysign(0, -1)} {
+		f.Add(v)
+	}
+	f.Fuzz(func(t *testing.T, v float64) {
+		got, terr := nonNegativeIntValue(v, "n")
+		accept := !math.IsNaN(v) && !math.IsInf(v, 0) && math.Trunc(v) == v && v >= 0 && v < limit
+		if accept != (terr == nil) {
+			t.Fatalf("nonNegativeIntValue(%v): accepted = %v, want %v", v, terr == nil, accept)
+		}
+		if accept && float64(got) != v {
+			t.Fatalf("nonNegativeIntValue(%v) = %d", v, got)
+		}
+	})
+}
+
+func TestPlainToRealHTML(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", ""},
+		{"a", "<div>a</div>"},
+		{`&<>"'`, "<div>&amp;&lt;&gt;&#34;&#39;</div>"},
+		{"a\n\nb", "<div>a</div><div></div><div>b</div>"},
+		{"a\n", "<div>a</div><div></div>"},
+	} {
+		if got := plainToRealHTML(tc.in); got != tc.want {
+			t.Errorf("plainToRealHTML(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// FuzzPlainToRealHTML checks that plainToRealHTML loses nothing: undoing the <div> wrapping and
+// the HTML escaping gives back the plain text.
+func FuzzPlainToRealHTML(f *testing.F) {
+	for _, s := range []string{"", "a", "a\nb", "\n", "a\n", `&<>"'`, "</div><div>", "&amp;lt;"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		out := plainToRealHTML(s)
+		if (out == "") != (s == "") {
+			t.Fatalf("plainToRealHTML(%q) = %q", s, out)
+		}
+		if s == "" {
+			return
+		}
+		inner, okPrefix := strings.CutPrefix(out, "<div>")
+		inner, okSuffix := strings.CutSuffix(inner, "</div>")
+		if !okPrefix || !okSuffix {
+			t.Fatalf("plainToRealHTML(%q) = %q, want it wrapped in <div>...</div>", s, out)
+		}
+		if back := html.UnescapeString(strings.ReplaceAll(inner, "</div><div>", "\n")); back != s {
+			t.Fatalf("plainToRealHTML(%q) = %q, which decodes to %q", s, out, back)
+		}
+	})
 }
 
 func TestDuplicateTopicKitchenSinkSummariesSmoke(t *testing.T) {
