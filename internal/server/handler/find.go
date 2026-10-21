@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/mab-go/xmind-mcp/internal/xmind"
@@ -112,36 +111,6 @@ func childSubtrees(t *xmind.Topic, curDepth int, maxDepth *int, opts subtreeOpts
 	return out
 }
 
-// parseDepthOptional converts an optional MCP depth argument to *int. JSON numbers arrive as float64;
-// non-whole values are rejected.
-func parseDepthOptional(raw any) (*int, *mcp.CallToolResult) {
-	if raw == nil {
-		return nil, nil
-	}
-	switch v := raw.(type) {
-	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return nil, mcp.NewToolResultError("invalid argument depth: must be a finite number")
-		}
-		if v < 0 {
-			return nil, mcp.NewToolResultError("invalid argument depth: must be non-negative")
-		}
-		trunc := math.Trunc(v)
-		if trunc != v {
-			return nil, mcp.NewToolResultError("invalid argument depth: must be a whole number")
-		}
-		d := int(trunc)
-		return &d, nil
-	case int:
-		if v < 0 {
-			return nil, mcp.NewToolResultError("invalid argument depth: must be non-negative")
-		}
-		return &v, nil
-	default:
-		return nil, mcp.NewToolResultError("invalid argument depth: expected a number")
-	}
-}
-
 // parseBoolOptional reads an optional boolean MCP argument; missing or null is false.
 func parseBoolOptional(args map[string]any, key string) (bool, *mcp.CallToolResult) {
 	if raw, has := args[key]; has && raw != nil {
@@ -187,12 +156,9 @@ func readMapAndSheet(absPath, sheetID string) (*xmind.Sheet, *mcp.CallToolResult
 }
 
 func getSubtreeDepthAndOpts(args map[string]any) (maxDepth *int, opts subtreeOpts, toolErr *mcp.CallToolResult) {
-	if raw, has := args["depth"]; has {
-		md, derr := parseDepthOptional(raw)
-		if derr != nil {
-			return nil, subtreeOpts{}, derr
-		}
-		maxDepth = md
+	maxDepth, derr := optionalNonNegativeInt(args, "depth")
+	if derr != nil {
+		return nil, subtreeOpts{}, derr
 	}
 	includeNotes, berr := parseBoolOptional(args, "include_notes")
 	if berr != nil {

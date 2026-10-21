@@ -421,6 +421,44 @@ func replaceID(v, bad any) any {
 	return bad
 }
 
+// badNumbers are values an integer argument must refuse, with a fragment of each one's message.
+var badNumbers = []struct {
+	value any
+	want  string
+}{
+	{1e19, "too large"},
+	{-1.0, "must be non-negative"},
+	{0.5, "must be a whole number"},
+	{"1", "expected a number"},
+}
+
+// numberScenarios set each of the tool's integer arguments, read from its input schema, to each
+// of badNumbers in turn.
+func numberScenarios(st *mcpserver.ServerTool) []contractScenario {
+	var keys []string
+	for key, raw := range st.Tool.InputSchema.Properties {
+		if prop, _ := raw.(map[string]any); prop["type"] == "integer" {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	var out []contractScenario
+	for _, key := range keys {
+		for _, bad := range badNumbers {
+			out = append(out, contractScenario{
+				name: fmt.Sprintf("%s=%#v", key, bad.value),
+				want: bad.want,
+				setup: func(t *testing.T, e contractEnv) map[string]any {
+					args := e.fixtureCall(t)
+					args[key] = bad.value
+					return args
+				},
+			})
+		}
+	}
+	return out
+}
+
 // callContractTool sends tools/call for tool through s, so the tool middleware runs, and
 // returns the decoded response. The request is built with json.Marshal, which escapes a NUL in
 // a path as valid JSON (fmt's %q would not).
@@ -602,7 +640,7 @@ func TestToolErrorContract(t *testing.T) {
 	for _, name := range slices.Sorted(maps.Keys(contractCases)) {
 		tc := contractCases[name]
 		writes := writesFile(tools[name])
-		for _, sc := range slices.Concat(scenarios, idScenarios(tc)) {
+		for _, sc := range slices.Concat(scenarios, idScenarios(tc), numberScenarios(tools[name])) {
 			t.Run(name+"/"+sc.name, func(t *testing.T) {
 				runContractScenario(t, s, name, writes, contractEnv{dir: t.TempDir(), fixture: fixture, tc: tc}, sc)
 			})
