@@ -62,9 +62,12 @@ func (h *XMindHandler) FlattenToOutline(ctx context.Context, req mcp.CallToolReq
 }
 
 func outlineExportOptionsFromArgs(args map[string]any) (format string, includeNotes bool, toolErr *mcp.CallToolResult) {
-	format = "markdown"
-	if v, ok := args["format"].(string); ok && v != "" {
-		format = v
+	format, _, toolErr = optionalString(args, "format")
+	if toolErr != nil {
+		return "", false, toolErr
+	}
+	if format == "" {
+		format = "markdown"
 	}
 	if format != "text" && format != "markdown" {
 		return "", false, mcp.NewToolResultError(`invalid argument format: expected "text" or "markdown"`)
@@ -78,14 +81,18 @@ func outlineExportOptionsFromArgs(args map[string]any) (format string, includeNo
 }
 
 func outlineStartTopic(sh *xmind.Sheet, args map[string]any) (*xmind.Topic, *mcp.CallToolResult) {
-	if v, ok := args["topic_id"].(string); ok && v != "" {
-		start := findTopicByID(&sh.RootTopic, v)
-		if start == nil {
-			return nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", v))
-		}
-		return start, nil
+	id, _, toolErr := optionalString(args, "topic_id")
+	if toolErr != nil {
+		return nil, toolErr
 	}
-	return &sh.RootTopic, nil
+	if id == "" {
+		return &sh.RootTopic, nil
+	}
+	start := findTopicByID(&sh.RootTopic, id)
+	if start == nil {
+		return nil, mcp.NewToolResultError(fmt.Sprintf("topic not found: %s", id))
+	}
+	return start, nil
 }
 
 func flattenTopicWriteText(b *strings.Builder, title, plain string, depth int, hasNotes bool) {
@@ -186,17 +193,19 @@ func (h *XMindHandler) ImportFromOutline(ctx context.Context, req mcp.CallToolRe
 	}
 
 	if sheetIDArg == "" {
-		return importOutlineNewSheet(mw, sheets, pairs, rootTitle)
+		return importOutlineNewSheet(absPath, mw, sheets, pairs, rootTitle)
 	}
-	return importOutlineAppend(mw, sheets, sheetIDArg, parentIDArg, pairs)
+	return importOutlineAppend(absPath, mw, sheets, sheetIDArg, parentIDArg, pairs)
 }
 
 func parseImportOutlineSheetArgs(args map[string]any) (sheetID, parentID, rootTitle string, toolErr *mcp.CallToolResult) {
-	if v, ok := args["sheet_id"].(string); ok {
-		sheetID = v
+	sheetID, _, toolErr = optionalString(args, "sheet_id")
+	if toolErr != nil {
+		return "", "", "", toolErr
 	}
-	if v, ok := args["parent_id"].(string); ok && v != "" {
-		parentID = v
+	parentID, _, toolErr = optionalString(args, "parent_id")
+	if toolErr != nil {
+		return "", "", "", toolErr
 	}
 	if parentID != "" && sheetID == "" {
 		return "", "", "", mcp.NewToolResultError("invalid arguments: parent_id requires sheet_id (omit parent_id when creating a new sheet)")
@@ -218,7 +227,7 @@ const defaultImportRootTitle = "Imported Outline"
 // importOutlineNewSheet appends a sheet built from the outline; see newSheetRootFromForest for
 // how its root is chosen. pairs must be non-empty (ImportFromOutline rejects an empty outline),
 // so the forest has at least one tree.
-func importOutlineNewSheet(mw *xmind.MapWriter, sheets []xmind.Sheet, pairs []outlinePair, rootTitle string) (*mcp.CallToolResult, error) {
+func importOutlineNewSheet(absPath string, mw *xmind.MapWriter, sheets []xmind.Sheet, pairs []outlinePair, rootTitle string) (*mcp.CallToolResult, error) {
 	title, children := newSheetRootFromForest(buildOutlineForest(pairs), rootTitle)
 	bumpAllSheetsRevisionID(sheets)
 	sh := newSheet(title, title)
@@ -228,13 +237,13 @@ func importOutlineNewSheet(mw *xmind.MapWriter, sheets []xmind.Sheet, pairs []ou
 	}
 	sheets = append(sheets, sh)
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	n := countTopics(&sh.RootTopic)
 	return textResult(fmt.Sprintf("imported %d topics into new sheet id %s", n, sh.ID)), nil
 }
 
-func importOutlineAppend(mw *xmind.MapWriter, sheets []xmind.Sheet, sheetID, parentID string, pairs []outlinePair) (*mcp.CallToolResult, error) {
+func importOutlineAppend(absPath string, mw *xmind.MapWriter, sheets []xmind.Sheet, sheetID, parentID string, pairs []outlinePair) (*mcp.CallToolResult, error) {
 	sh := findSheetByID(sheets, sheetID)
 	if sh == nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sheet not found: %s", sheetID)), nil
@@ -258,7 +267,7 @@ func importOutlineAppend(mw *xmind.MapWriter, sheets []xmind.Sheet, sheetID, par
 	}
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("imported %d topics", total)), nil
 }
@@ -583,7 +592,7 @@ type FindAndReplaceResponse struct {
 	Changes      []findReplaceChange `json:"changes"`
 }
 
-func finishFindReplace(mw *xmind.MapWriter, sheets []xmind.Sheet, changes []findReplaceChange) (*mcp.CallToolResult, error) {
+func finishFindReplace(absPath string, mw *xmind.MapWriter, sheets []xmind.Sheet, changes []findReplaceChange) (*mcp.CallToolResult, error) {
 	// Build the result before committing, so a marshal failure never follows a write.
 	res, err := jsonResult(FindAndReplaceResponse{ChangedCount: len(changes), Changes: changes})
 	if err != nil {
@@ -591,7 +600,7 @@ func finishFindReplace(mw *xmind.MapWriter, sheets []xmind.Sheet, changes []find
 	}
 	if len(changes) > 0 {
 		if err := mw.Commit(sheets); err != nil {
-			return nil, fmt.Errorf("write map: %w", err)
+			return commitFailure(absPath, err)
 		}
 	}
 	return res, nil
@@ -614,7 +623,7 @@ func (h *XMindHandler) FindAndReplace(ctx context.Context, req mcp.CallToolReque
 		return toolErr2, nil
 	}
 	changes := findReplaceRunOnSheets(sheetsToUpdate, findStr, replaceStr, exact)
-	return finishFindReplace(mw, sheets, changes)
+	return finishFindReplace(absPath, mw, sheets, changes)
 }
 
 func stringArgAllowEmpty(args map[string]any, key string) (string, *mcp.CallToolResult) {

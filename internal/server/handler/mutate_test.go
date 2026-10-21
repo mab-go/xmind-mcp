@@ -2777,8 +2777,8 @@ func TestIdempotentToolsRepeatDoesNotWrite(t *testing.T) {
 }
 
 // TestIdempotentToolsWriteFailure makes the map's directory read-only, so committing fails. A
-// call that changes the map must return a protocol error and leave the file as it was; a repeat
-// of a call already applied must still succeed, since it does not write.
+// call that changes the map must return a "cannot save map" tool error and leave the file as it
+// was; a repeat of a call already applied must still succeed, since it does not write.
 func TestIdempotentToolsWriteFailure(t *testing.T) {
 	h := NewXMindHandler()
 	for _, tc := range idempotentToolCases(h) {
@@ -2793,9 +2793,8 @@ func TestIdempotentToolsWriteFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req := mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: args}}
-			if _, err := tc.fn(context.Background(), req); err == nil || !strings.Contains(err.Error(), "write map") {
-				t.Fatalf("changing call in read-only dir: err = %v, want write map error", err)
+			if res := callTool(t, tc.fn, args); !res.IsError || !strings.Contains(textContent(t, res), "cannot save map") {
+				t.Fatalf("changing call in read-only dir: %q (isError %t), want a cannot save map tool error", textContent(t, res), res.IsError)
 			}
 			if !bytes.Equal(before, readFileBytes(t, path)) {
 				t.Fatal("failed write changed the file")

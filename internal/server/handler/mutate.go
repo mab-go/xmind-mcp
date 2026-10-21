@@ -488,7 +488,7 @@ func (h *XMindHandler) AddTopic(ctx context.Context, req mcp.CallToolRequest) (*
 	}
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return jsonResult(AddTopicResponse{
 		ID:           topic.ID,
@@ -541,7 +541,7 @@ func (h *XMindHandler) DuplicateTopic(ctx context.Context, req mcp.CallToolReque
 	}
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return jsonResult(DuplicateTopicResponse{
 		SourceID:     topicID,
@@ -597,7 +597,7 @@ func (h *XMindHandler) AddTopicsBulk(ctx context.Context, req mcp.CallToolReques
 	}
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return jsonResult(AddTopicsBulkResponse{
 		AddedCount:    count,
@@ -647,7 +647,7 @@ func (h *XMindHandler) RenameTopic(ctx context.Context, req mcp.CallToolRequest)
 	}
 
 	if err := commitSheetChange(mw, sheets, sh, setTopicTitle(topic, title)); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("renamed topic %s", topicID)), nil
 }
@@ -720,7 +720,7 @@ func (h *XMindHandler) DeleteTopic(ctx context.Context, req mcp.CallToolRequest)
 	pruned := pruneRelationshipsToRemoved(sh, before)
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("deleted topic %s; removed %d relationship(s)", topicID, pruned)), nil
 }
@@ -840,7 +840,7 @@ func (h *XMindHandler) MoveTopic(ctx context.Context, req mcp.CallToolRequest) (
 
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return jsonResult(MoveTopicResponse{
 		TopicID:      topicID,
@@ -966,7 +966,7 @@ func (h *XMindHandler) ReorderChildren(ctx context.Context, req mcp.CallToolRequ
 	changed := !attachedOrderMatches(parent.Children.Attached, orderedIDs)
 	parent.Children.Attached = newOrder
 	if err := commitSheetChange(mw, sheets, sh, changed); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("reordered %d children under %s", len(newOrder), parentID)), nil
 }
@@ -1388,7 +1388,7 @@ func (h *XMindHandler) SetTopicProperties(ctx context.Context, req mcp.CallToolR
 	}
 
 	if err := commitSheetChange(mw, sheets, sh, changed); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("updated topic %s", topicID)), nil
 }
@@ -1437,7 +1437,7 @@ func (h *XMindHandler) SetTopicPropertiesBulk(ctx context.Context, req mcp.CallT
 	}
 
 	if err := commitSheetChange(mw, sheets, sh, changed); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("updated %d topics", len(topicIDs))), nil
 }
@@ -1485,7 +1485,7 @@ func (h *XMindHandler) AddFloatingTopic(ctx context.Context, req mcp.CallToolReq
 	ch.Detached = append(ch.Detached, topic)
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("added floating topic id %s", topic.ID)), nil
 }
@@ -1530,7 +1530,7 @@ func (h *XMindHandler) AddRelationship(ctx context.Context, req mcp.CallToolRequ
 	relID := appendRelationship(sh, fromID, toID, label)
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("added relationship id %s", relID)), nil
 }
@@ -1572,7 +1572,7 @@ func (h *XMindHandler) DeleteRelationship(ctx context.Context, req mcp.CallToolR
 	sh.Relationships = slices.Delete(sh.Relationships, idx, idx+1)
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("deleted relationship id %s", relationshipID)), nil
 }
@@ -1619,7 +1619,7 @@ func (h *XMindHandler) AddSummary(ctx context.Context, req mcp.CallToolRequest) 
 
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("added summary topic id %s", summaryTopicID)), nil
 }
@@ -1667,7 +1667,7 @@ func (h *XMindHandler) AddBoundary(ctx context.Context, req mcp.CallToolRequest)
 
 	sh.RevisionID = uuid.New().String()
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 	return textResult(fmt.Sprintf("added boundary id %s", boundaryID)), nil
 }

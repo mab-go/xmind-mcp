@@ -1,6 +1,11 @@
 package handler
 
 import (
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"syscall"
 	"testing"
 
 	"github.com/google/uuid"
@@ -240,5 +245,78 @@ func TestAncestryPathHelper(t *testing.T) {
 	root.Children.Detached = []xmind.Topic{*det}
 	if got := ancestryPath(root, "det"); len(got) != 1 || got[0] != "Root" {
 		t.Fatalf("detached child: got %#v", got)
+	}
+}
+
+// TestCommitFailure checks how a failed save is reported: a refusal the caller can fix is a tool
+// error whose hint names the cause, and any other failure is a protocol error.
+func TestCommitFailure(t *testing.T) {
+	const absPath = "/maps/m.xmind"
+	tempFileErr := func(errno error) error {
+		return fmt.Errorf("create temp file: %w", &fs.PathError{Op: "open", Path: "/maps/.xmind-tmp-1", Err: errno})
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"read-only map", fmt.Errorf("write: %w", xmind.ErrMapReadOnly),
+			"cannot save map at /maps/m.xmind: the file is read-only"},
+		{"folder not writable", tempFileErr(syscall.EACCES),
+			"cannot save map at /maps/m.xmind: permission denied (saving needs write access to the map's folder)"},
+		{"read-only filesystem", tempFileErr(errReadOnlyFS),
+			"cannot save map at /maps/m.xmind: " + errReadOnlyFS.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := commitFailure(absPath, tc.err)
+			if err != nil || res == nil || !res.IsError {
+				t.Fatalf("commitFailure(%v) = %v, %v; want a tool error", tc.err, res, err)
+			}
+			if got := textContent(t, res); got != tc.want {
+				t.Errorf("message = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	t.Run("other failure", func(t *testing.T) {
+		res, err := commitFailure(absPath, io.ErrShortWrite)
+		if res != nil || !errors.Is(err, io.ErrShortWrite) || err.Error() != "write map: short write" {
+			t.Errorf("commitFailure(io.ErrShortWrite) = %v, %v; want protocol error \"write map: short write\"", res, err)
+		}
+	})
+}
+
+// TestPathAccessToolError checks how a failed stat is reported: a missing file or a path that
+// can't be used is a tool error that names the path once, and any other failure returns nil so
+// the caller reports a protocol error.
+func TestPathAccessToolError(t *testing.T) {
+	const absPath = "/maps/m.xmind"
+	statErr := func(errno error) error {
+		return &fs.PathError{Op: "stat", Path: absPath, Err: errno}
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string // empty for a protocol error
+	}{
+		{"missing file", statErr(syscall.ENOENT), "file not found: /maps/m.xmind"},
+		{"permission denied", statErr(syscall.EACCES), "cannot access /maps/m.xmind: permission denied"},
+		{"error without a path", syscall.EACCES, "cannot access /maps/m.xmind: permission denied"},
+		{"I/O error", statErr(syscall.EIO), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := pathAccessToolError(absPath, tc.err)
+			if tc.want == "" {
+				if res != nil {
+					t.Fatalf("pathAccessToolError(%v) = %q, want nil", tc.err, textContent(t, res))
+				}
+				return
+			}
+			if res == nil || !res.IsError {
+				t.Fatalf("pathAccessToolError(%v) = %v, want a tool error", tc.err, res)
+			}
+			if got := textContent(t, res); got != tc.want {
+				t.Errorf("message = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

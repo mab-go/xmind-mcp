@@ -17,10 +17,10 @@ Dockerfile                — multi-stage image (Alpine build, distroless runtim
 CLAUDE.md                 — symlink → AGENTS.md (Claude Code auto-loads this)
 .dockerignore             — Docker build context exclusions
 .goreleaser.yaml          — goreleaser config; cross-builds Linux/Windows archives on `v*` tags
-codecov.yml               — Codecov config; informational (non-blocking) project & patch coverage
+codecov.yml               — Codecov config; informational (non-blocking) project & patch coverage; ignores cmd/gen-example
 .github/
   workflows/
-    ci.yml                — test (+ coverage upload to Codecov), lint, and cyclomatic-complexity report artifact on push and PR
+    ci.yml                — test (+ coverage across packages with -coverpkg=./..., uploaded to Codecov), lint, and cyclomatic-complexity report artifact on push and PR
     docker-publish.yml    — multi-platform image build and push to GHCR
     release.yml           — goreleaser release on `v*` tag push (binaries to GitHub Releases)
 cmd/
@@ -35,12 +35,15 @@ internal/
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints, and that whole-number parameters are declared as non-negative integers
     output_schema_test.go — asserts which tools declare an outputSchema and that their structured output matches it
+    error_contract_test.go — calls every tool with bad paths, bad IDs, unreachable paths and read-only maps; each must return a tool error and change nothing on disk
     hooks.go              — MCP lifecycle hooks (initialize and server/discover)
     recovery.go           — tool-handler middleware: recovers panics, logs tool.panic with a stack trace
     instructions.go       — server instructions sent in the initialize and server/discover results
     events.go             — logging event-name constants (logging.Event)
     handler/
       handler.go          — XMindHandler struct and shared utilities (textResult, jsonResult, etc.)
+      patherrors_other.go — Unix errors for a path that can't be used (name too long, symlink loop, read-only filesystem)
+      patherrors_windows.go — the Win32 equivalents (Go's Windows ENAMETOOLONG, ELOOP and EROFS are values Windows never returns)
       handler_test.go     — tests for handler helpers (e.g. deepCloneTopic)
       schema.go           — OutputSchema[T]: outputSchema tool option generated from a response type
       sheets.go           — handlers for Tier 1: file & sheet management tools
@@ -63,7 +66,7 @@ internal/
     reader.go             — open zip, parse content.json → []Sheet (ReadMap, parseContentFromZip)
     reader_test.go        — ReadMap errors, fixture parsing, and the WriteMap round trip
     writer.go             — serialize []Sheet → content.json, write back to zip (WriteMap, writeMapBody)
-    writer_test.go        — WriteMap/CreateNewMap: entry preservation, atomic failure, no-overwrite, file modes
+    writer_test.go        — WriteMap/CreateNewMap: entry preservation, atomic failure, no-overwrite, file modes, read-only maps refused
     update.go             — OpenMapForUpdate/MapWriter: single-open read-then-commit handle for mutations
     update_test.go        — Commit/WriteMap parity, MapWriter lifecycle guards, writes through symlinks
     pathlock.go           — lockPath/resolveMapPath: in-process per-file write lock, keyed by the symlink-resolved path
@@ -129,6 +132,8 @@ Every mutating tool call follows this exact pattern — do not deviate from it:
 
 **Permissions survive the swap.** `os.CreateTemp` always creates files with mode `0600`, so `finishZipTempFile` sets the finished temp file's permission bits before the rename: an edit keeps the original file's bits (`writeMapBody` stats the target), and `CreateNewMap` creates its placeholder with `0666` and lets the umask filter it (as `os.Create` does), then gives the new map the same bits. Any new temp-then-swap path must pass a mode through the same way. Ownership is not restored: when another user edits a group-shared map, the replaced file belongs to that user. Extended attributes and ACLs are not carried over either.
 
+**Read-only maps are not replaced.** The swap needs write access only to the map's folder, so a rename would replace even a map the server can't write. Before writing anything, `writeMapBody` refuses with `xmind.ErrMapReadOnly` (which matches `fs.ErrPermission`) a map with no write permission bits (even as root) or one it is refused opening for writing (an owner without the write bit on a group-writable map, an ACL, an immutable file), so `WriteMap` and `Commit` leave it as it is. An edit also needs write access to the map's folder, because the temp file is created there. Handlers report both cases as tool errors (see `commitFailure` under Argument extraction).
+
 **Single-open mutation path.** Mutating handlers open the `.xmind` once via `xmind.OpenMapForUpdate` (through the `statAndOpenMapForUpdate` / `loadSheet…ForUpdate` helpers), which returns the parsed `[]Sheet` plus a `*xmind.MapWriter` that keeps the zip reader open. The handler mutates the sheets in memory and calls `mw.Commit(sheets)` to persist them, raw-copying the still-open non-`content.json` entries (steps 1–5 above happen across one file open instead of two). `Commit` closes the read handle *before* the atomic swap, so on Windows the swap runs with no open handle on the original. `Commit` is single-use (a second `Commit`, or one after `Close`, errors). The free-standing `xmind.WriteMap` (which re-reads the file fresh) is retained for tests and any read-fresh caller; `xmind.CreateNewMap` writes brand-new maps and never overwrites: it claims the destination with `O_CREATE|O_EXCL` before writing (an existing path fails with an error wrapping `fs.ErrExist`), renames the finished temp file over that empty placeholder, and removes the placeholder on failure. Callers must not add their own existence check, which would race with a concurrent creator; to replace a file deliberately (e.g. `cmd/gen-example`), remove it first. The temp-then-swap mechanics below are unchanged and shared by both `WriteMap` and `Commit` via the internal `writeMapBody`, which swaps onto the symlink-resolved path (creating the temp file in the real file's directory), so an edit through a symlink to the map updates the real file and leaves the link in place.
 
 **Per-path write lock.** Steps 1–6 hold an in-process lock for the file (`lockPath` in `internal/xmind/pathlock.go`), so overlapping tool calls (mcp-go runs `tools/call` on a worker pool) on one file run one at a time instead of each committing over the others' changes. `OpenMapForUpdate` acquires it and the `MapWriter` holds it until a successful `Commit` or `Close`; the mandatory `defer mw.Close()` is what releases it on every other path, so handlers need no lock code of their own. `WriteMap` holds it for its own re-read and swap (not for a caller's earlier read), and `CreateNewMap` holds it from before the `O_EXCL` claim until the rename, so a locked writer never opens the empty placeholder. The key is the absolute path with symlinks resolved (best effort: the directory alone for a file not yet created), the same path the swap replaces, so a symlinked directory or a symlink to the file shares the real file's lock. Reads take no lock: the rename is atomic, so a reader sees the old or the new file (or, during `CreateNewMap`, the empty placeholder). The lock is not reentrant: while a goroutine holds a `MapWriter` for a file, it must not call `OpenMapForUpdate`, `WriteMap`, or `CreateNewMap` on that file. What it does **not** cover:
@@ -181,7 +186,7 @@ Every tool must declare its display title and MCP behavior hints with `withAnnot
 | `effectDestructive` | may change or remove existing content, and a repeat call can change it again |
 | `effectDestructiveIdempotent` | may change or remove existing content, and a repeat call has no further effect (renames, sets, deletes) |
 
-`openWorldHint` is always `false`: every tool touches only the local file named by `path`. The `toolEffect` zero value is invalid and an unknown effect makes `withAnnotations` panic; since tools are package-level vars, that fails every test in the package and stops the binary at startup. When adding an effect, add a `case` for it. Add each new tool to `expectedAnnotations` in `internal/server/tools_test.go`; the test fails for any registered tool missing from that table.
+`openWorldHint` is always `false`: every tool touches only the local file named by `path`. The `toolEffect` zero value is invalid and an unknown effect makes `withAnnotations` panic; since tools are package-level vars, that fails every test in the package and stops the binary at startup. When adding an effect, add a `case` for it. Add each new tool to `expectedAnnotations` in `internal/server/tools_test.go`; the test fails for any registered tool missing from that table. Also add it to `contractCases` in `internal/server/error_contract_test.go`, with base arguments that succeed on that test's fixture map and the names of its ID arguments; `TestToolErrorContractCoversAllTools` fails for any registered tool missing from that table, and `TestToolErrorContract` then checks the new tool returns tool errors, never protocol errors or writes, for bad paths, bad IDs, unreachable paths and read-only maps.
 
 A tool whose handler returns `jsonResult` must also declare its output schema with `handler.OutputSchema[handler.<Type>]()`, right after `withAnnotations`. `<Type>` is the exported struct the handler passes to `jsonResult` (e.g. `handler.OpenMapResponse`). Add the tool to `jsonOutputTools` in `internal/server/output_schema_test.go`, and add cases to `TestStructuredOutputMatchesSchema` that cover each success return path. Clients may check results against the schema, so a wrong schema on a writing tool can look like a failure after the file was saved. `OutputSchema` builds the schema with `jsonschema.For`, which requires fields without `omitempty` and rejects keys the struct does not name. A recursive type, or a type with custom JSON (like `xmind.Marker`, which writes back unknown keys), needs an entry in `outputTypeSchemas` in `handler/schema.go`. Like `withAnnotations`, `OutputSchema` panics on a schema error.
 
@@ -222,7 +227,8 @@ if toolErr != nil {
 }
 
 // statAndReadMap checks existence, reads the zip, and parses content.json.
-// toolErr is non-nil for caller-fixable conditions (file not found, bad zip).
+// toolErr is non-nil for caller-fixable conditions (file not found, a path that can't
+// be accessed, bad zip).
 // err is non-nil for unexpected I/O or environment failures.
 // Use this in read-only handlers (find/list/get); it closes the file immediately.
 sheets, toolErr, err := statAndReadMap(absPath)
@@ -254,9 +260,11 @@ if toolErr != nil {
 }
 // …mutate sheets…
 if err := mw.Commit(sheets); err != nil {
-    return nil, fmt.Errorf("write map: %w", err)
+    return commitFailure(absPath, err)
 }
 ```
+
+Return a failed `Commit` through `commitFailure` (`handler.go`), never as a bare `write map` error. It returns a tool error ("cannot save map at …") when the map file is read-only (`xmind.ErrMapReadOnly`), the filesystem is read-only (`errReadOnlyFS`: `EROFS`, or `ERROR_WRITE_PROTECT` on Windows), or the map's folder can't be written (any other `fs.ErrPermission`), naming that cause; the map is unchanged in each case. Any other failure is a `write map` protocol error.
 
 **Idempotent tools must not write when nothing changes.** A tool annotated `effectAdditiveIdempotent` or `effectDestructiveIdempotent` (see Tool definitions) must leave the file byte-identical when a call changes nothing, so a repeated call has no effect. Do not bump `revisionId` and commit unconditionally. Use the helpers in `mutate.go`: `commitSheetChange(mw, sheets, sh, changed)` bumps the sheet's `revisionId` and commits only when `changed` is true. Compute `changed` from a specific check (`setTopicTitle`, `attachedOrderMatches`) or wrap the mutation in `trackTopicChanges`, which compares JSON snapshots taken before and after. When the mutation itself is not reversible in place, check before mutating and return early, as `MoveTopic` does with `moveIsNoOp`. The no-op path returns the same success response as a real change. `TestIdempotentToolsRepeatDoesNotWrite` in `mutate_test.go` covers each idempotent tool.
 
@@ -416,7 +424,7 @@ Also verify that documentation reflects the change before finishing. Update **`A
 |---|---|
 | New file added or removed | `Project Structure` tree in `AGENTS.md` |
 | New handler helper added to `handler.go` | Appropriate subsection in `AGENTS.md` (traversal/lookup table for tree helpers; Text response helper for `textResult` / `jsonResult`) |
-| New tool registered, renamed, or removed | Tier tables and tool count in `README.md`; steps, coverage, and tool count in the `xmind-mcp-smoke-test` skill; tool leaves, tier notes, and counts in `cmd/gen-example/main.go` (then `make gen-example` and retake the README PNG); `serverInstructions` if the workflow changes; Conventions section in `AGENTS.md` if a new pattern is introduced |
+| New tool registered, renamed, or removed | `expectedAnnotations` in `internal/server/tools_test.go` and `contractCases` in `internal/server/error_contract_test.go`; Tier tables and tool count in `README.md`; steps, coverage, and tool count in the `xmind-mcp-smoke-test` skill; tool leaves, tier notes, and counts in `cmd/gen-example/main.go` (then `make gen-example` and retake the README PNG); `serverInstructions` if the workflow changes; Conventions section in `AGENTS.md` if a new pattern is introduced |
 | New struct field or codec allowlist entry | Schema Critical Notes in `AGENTS.md` |
 | New convention established | `Conventions` section in `AGENTS.md` |
 | New `.cursor/rules/` or `.agents/skills/` file | Reflect in `AGENTS.md` if it affects agent behavior |
@@ -429,7 +437,7 @@ This is the most important convention to get right. There are two distinct failu
 
 ### Tool errors (expected / recoverable)
 
-Topic not found, file doesn't exist, bad arguments, file is not a valid `.xmind` — these are conditions the model can read and act on. Return them as tool-level errors:
+Topic not found, file doesn't exist, bad arguments, file is not a valid `.xmind`, a path the server can't access (permission denied, not a directory, name too long, symlink loop, invalid characters such as NUL), a save refused because the map file or its filesystem is read-only or its folder can't be written — these are conditions the model can read and act on. Return them as tool-level errors:
 
 ```go
 return mcp.NewToolResultError("topic not found: no topic with title \"Foo\" exists"), nil
@@ -439,13 +447,16 @@ The signature is `(*mcp.CallToolResult, nil)` — the Go error is `nil`. The `Is
 
 ### Protocol errors (unexpected / unrecoverable)
 
-I/O errors after a successful open, failures while persisting the map, internal invariant violations — these are genuine bugs or environmental failures. Return them as Go errors:
+I/O errors after a successful open, other failures while persisting the map (a full disk, an I/O error), internal invariant violations — these are genuine bugs or environmental failures. Return them as Go errors:
 
 ```go
-if err := xmind.WriteMap(absPath, sheets); err != nil {
-    return nil, fmt.Errorf("write map: %w", err)
+data, err := json.Marshal(v)
+if err != nil {
+    return nil, fmt.Errorf("marshal response: %w", err)
 }
 ```
+
+The path and save helpers already split these: `statAndReadMap` and `statAndOpenMapForUpdate` turn a missing or inaccessible path into a tool error (`pathAccessToolError`) and return any other stat failure as a protocol error, and `commitFailure` does the same for a failed save. `isPathAccessError` checks `fs.ErrPermission`, `ENOTDIR` and `EINVAL` on every platform, plus `osPathAccessErrors` from `patherrors_other.go` or `patherrors_windows.go`. Go's Windows `ENAMETOOLONG`, `ELOOP` and `EROFS` are invented values that `errors.Is` never matches there, so Windows lists the Win32 errors instead (`ERROR_INVALID_NAME`, `ERROR_FILENAME_EXCED_RANGE`, and so on).
 
 The signature is `(nil, error)`. These surface as MCP protocol errors and look like crashes to the model — reserve them for situations that are genuinely unrecoverable.
 

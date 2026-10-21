@@ -114,6 +114,7 @@ E6. `xmind_move_topic` → move `alphaId` under one of its own descendants (e.g.
 E7. Create the **error-scenario file** with `xmind_create_map` (single sheet). Then `xmind_delete_sheet` on its only sheet. **Expect:** tool error ("cannot delete the last sheet").
 E8. `xmind_add_summary` → `sheetMain`, parent `alphaId`, `from_index=0.5`, `to_index=1`. **Expect:** tool error ("invalid argument from_index: must be a whole number"). `from_index` is declared an integer, so a client that checks arguments against the schema may refuse to send the call. If it does, record PASS with the client's message and note that the server check was not reached.
 E9. `xmind_move_topic` → `sheetMain`, `topic_id=sumId`, `new_parent_id=rootId`. **Expect:** tool error ("cannot move a summary topic").
+E10. `xmind_open_map` → `<scratch path>/child.xmind` (the scratch path is a file, so this path goes through a file). **Expect:** tool error ("cannot access", or "file not found" on Windows), not a protocol error.
 
 ## Cleanup
 
@@ -134,7 +135,7 @@ Produce a **per-tool PASS/FAIL report** suitable for release sign-off. Structure
    | ... | ... | ... |
 
    Every one of the 27 tools must appear. Mark any not reached as **NOT RUN** with the reason.
-3. **Error-path table** — E1–E9 with PASS/FAIL and the actual message returned.
+3. **Error-path table** — E1–E10 with PASS/FAIL and the actual message returned.
 4. **Final verdict:** `RELEASE OK` only if every tool ran and every assertion + error path passed. Otherwise `RELEASE BLOCKED` with the failing items listed first.
 
 State failures plainly with the exact tool call and the observed vs. expected result. Do not soften or omit a failure. If a step could not run because an earlier step failed, mark it BLOCKED and say which step blocked it.

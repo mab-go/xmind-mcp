@@ -252,6 +252,9 @@ func (h *XMindHandler) CreateMap(ctx context.Context, req mcp.CallToolRequest) (
 		if errors.Is(err, fs.ErrExist) {
 			return mcp.NewToolResultError(fmt.Sprintf("file already exists: %s", absPath)), nil
 		}
+		if errors.Is(err, fs.ErrNotExist) || isPathAccessError(err) {
+			return mcp.NewToolResultError(fmt.Sprintf("cannot create map at %s: %v", absPath, pathErrorReason(err))), nil
+		}
 		return nil, fmt.Errorf("create map: %w", err)
 	}
 
@@ -290,7 +293,7 @@ func (h *XMindHandler) AddSheet(ctx context.Context, req mcp.CallToolRequest) (*
 	sh := newSheet(sheetTitle, rootTitle)
 	sheets = append(sheets, sh)
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 
 	return textResult(fmt.Sprintf("added sheet id %s", sh.ID)), nil
@@ -331,7 +334,7 @@ func (h *XMindHandler) DeleteSheet(ctx context.Context, req mcp.CallToolRequest)
 	sheets = slices.Delete(sheets, idx, idx+1)
 	bumpAllSheetsRevisionID(sheets)
 	if err := mw.Commit(sheets); err != nil {
-		return nil, fmt.Errorf("write map: %w", err)
+		return commitFailure(absPath, err)
 	}
 
 	return textResult(fmt.Sprintf("deleted sheet id %s", sheetID)), nil

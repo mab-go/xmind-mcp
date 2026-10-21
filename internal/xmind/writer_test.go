@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -487,6 +488,77 @@ func TestWritesPreserveFileMode(t *testing.T) {
 		}
 		assertPerm(t, dst, want)
 	})
+}
+
+// TestWritesRefuseReadOnlyFile checks that WriteMap and Commit refuse to replace a map file
+// that has no write permission bits, although the rename would succeed in its writable
+// directory, and leave the file and its directory as they were.
+// mapWrites are the two ways to save a map: a MapWriter's Commit and a fresh WriteMap.
+var mapWrites = []struct {
+	name  string
+	write func(t *testing.T, dst string) error
+}{
+	{"Commit", func(t *testing.T, dst string) error {
+		sheets, mw, err := OpenMapForUpdate(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = mw.Close() }()
+		return mw.Commit(sheets)
+	}},
+	{"WriteMap", func(t *testing.T, dst string) error {
+		sheets, err := ReadMap(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return WriteMap(dst, sheets)
+	}},
+}
+
+// TestWritesRefuseReadOnlyFile checks that both writes refuse a map this process can't write and
+// leave it untouched: one with no write bits, and one only its group can write (0464, as
+// chmod u-w leaves a group-writable map). The swap needs only a writable folder, so either would
+// otherwise be replaced.
+func TestWritesRefuseReadOnlyFile(t *testing.T) {
+	skipUnlessUnixModes(t)
+	for _, mode := range []fs.FileMode{0o444, 0o464} {
+		for _, tc := range mapWrites {
+			t.Run(fmt.Sprintf("%s/%04o", tc.name, mode), func(t *testing.T) {
+				if mode&0o222 != 0 && os.Geteuid() == 0 {
+					t.Skip("root can write a file that has any write bit")
+				}
+				dst := copyKitchenSink(t)
+				t.Cleanup(func() { _ = os.Chmod(dst, 0o644) })
+				if err := os.Chmod(dst, mode); err != nil {
+					t.Fatal(err)
+				}
+				before := fileSHA256(t, dst)
+				if err := tc.write(t, dst); !errors.Is(err, ErrMapReadOnly) || !errors.Is(err, fs.ErrPermission) {
+					t.Errorf("write to a read-only map: err = %v, want ErrMapReadOnly, matching fs.ErrPermission", err)
+				}
+				assertReadOnlyMapUntouched(t, dst, before, mode)
+			})
+		}
+	}
+}
+
+// assertReadOnlyMapUntouched fails unless dst still has the content hash before and the given
+// mode, and no temp file was left beside it.
+func assertReadOnlyMapUntouched(t *testing.T, dst, before string, mode fs.FileMode) {
+	t.Helper()
+	if after := fileSHA256(t, dst); after != before {
+		t.Errorf("read-only map changed: before %s, after %s", before, after)
+	}
+	assertPerm(t, dst, mode)
+	ents, err := os.ReadDir(filepath.Dir(dst))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".xmind-tmp-") {
+			t.Errorf("leaked temp file: %s", e.Name())
+		}
+	}
 }
 
 func TestCreateNewMapUsesUmaskDefaultMode(t *testing.T) {
