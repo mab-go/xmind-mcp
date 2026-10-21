@@ -3,6 +3,7 @@ package xmind
 import (
 	"archive/zip"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -24,6 +25,12 @@ var stubContentXML []byte
 const metadataJSON = `{"dataStructureVersion":"2","creator":{"name":"xmind-mcp","version":"0.1.0"},"layoutEngineVersion":"3"}`
 
 const manifestJSON = `{"file-entries":{"content.json":{},"metadata.json":{},"content.xml":{}}}`
+
+// ErrMapReadOnly is returned by WriteMap and MapWriter.Commit when this process can't write the
+// map file: it has no write permission bits, or opening it for writing is refused. Replacing it
+// would succeed (the swap needs only a writable directory), but a map made read-only is left as
+// it is. It matches fs.ErrPermission.
+var ErrMapReadOnly = fmt.Errorf("map file is read-only: %w", fs.ErrPermission)
 
 // openZipReaderAtPath opens path as a zip and returns a reader; the caller must close the file.
 func openZipReaderAtPath(path string) (*zip.Reader, *os.File, error) {
@@ -185,16 +192,17 @@ func WriteMap(path string, sheets []Sheet) error {
 // (and before the atomic swap) so the caller can close the source handle that backs zr;
 // this lets the swap run with no open handle on the original. On any failure the temp
 // file is removed and the original is left untouched. The new file keeps the original's
-// permission bits.
+// permission bits. A dst with no write permission bits is refused with ErrMapReadOnly before
+// anything is written.
 func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func() error) error {
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
 		return fmt.Errorf("marshal content.json: %w", err)
 	}
 
-	orig, err := os.Stat(dst)
+	perm, err := writableTargetPerm(dst)
 	if err != nil {
-		return fmt.Errorf("stat target: %w", err)
+		return err
 	}
 
 	dir := filepath.Dir(dst)
@@ -230,11 +238,36 @@ func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func
 		}
 	}
 
-	if err := finishZipTempFile(zw, tmp, tmpPath, dst, orig.Mode().Perm()); err != nil {
+	if err := finishZipTempFile(zw, tmp, tmpPath, dst, perm); err != nil {
 		return err
 	}
 	swapped = true
 	return nil
+}
+
+// writableTargetPerm returns the permission bits of the map file a write will replace, which
+// the new file keeps, or ErrMapReadOnly when this process can't write the file: it has no write
+// bits (refused even for root, which could write it anyway), or opening it for writing is
+// refused (an owner without the write bit on a group-writable file, an ACL, an immutable file).
+func writableTargetPerm(dst string) (fs.FileMode, error) {
+	orig, err := os.Stat(dst)
+	if err != nil {
+		return 0, fmt.Errorf("stat target: %w", err)
+	}
+	perm := orig.Mode().Perm()
+	if perm&0o222 == 0 {
+		return 0, ErrMapReadOnly
+	}
+	// Opening for writing without O_TRUNC changes nothing. Any failure other than a permission
+	// error is left for the swap to report.
+	f, err := os.OpenFile(dst, os.O_WRONLY, 0)
+	if errors.Is(err, fs.ErrPermission) {
+		return 0, ErrMapReadOnly
+	}
+	if err == nil {
+		_ = f.Close()
+	}
+	return perm, nil
 }
 
 // CreateNewMap writes a new .xmind zip with content.json, metadata.json, manifest.json,

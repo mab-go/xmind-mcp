@@ -3,9 +3,12 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/google/uuid"
 	"github.com/mab-go/xmind-mcp/internal/xmind"
@@ -329,12 +332,73 @@ func optionalString(args map[string]any, key string) (val string, present bool, 
 	return s, true, nil
 }
 
-// statAndReadMap checks that absPath exists, reads the workbook, and maps I/O and parse failures
-// to tool errors vs protocol errors per 00-OVERVIEW.
+// isPathAccessError reports whether err means the path itself can't be used: no permission, a
+// file where a directory should be, a name too long, a symlink loop, an invalid path (such as
+// one containing NUL), or a read-only filesystem. The caller can fix these by pointing at
+// another path, so they are tool errors. osPathAccessErrors holds the errors whose numbers
+// differ between Unix and Windows.
+func isPathAccessError(err error) bool {
+	for _, target := range []error{fs.ErrPermission, syscall.ENOTDIR, syscall.EINVAL} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	for _, target := range osPathAccessErrors {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathErrorReason returns the cause of err without the operation and path an *fs.PathError
+// adds, for messages that already name the path.
+func pathErrorReason(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
+}
+
+// pathAccessToolError maps a failure to stat absPath to a tool error: "file not found" for a
+// missing file, "cannot access" for the failures isPathAccessError lists. It returns nil for
+// anything else, which the caller returns as a protocol error.
+func pathAccessToolError(absPath string, err error) *mcp.CallToolResult {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return mcp.NewToolResultError(fmt.Sprintf("file not found: %s", absPath))
+	case isPathAccessError(err):
+		return mcp.NewToolResultError(fmt.Sprintf("cannot access %s: %v", absPath, pathErrorReason(err)))
+	}
+	return nil
+}
+
+// commitFailure maps a failed mw.Commit to the handler's return values. A map file that is
+// read-only, a read-only filesystem, or a folder that can't be written is a tool error the
+// caller can fix (the map was left unchanged); any other failure is a protocol error. Each tool
+// error names its own cause: a permission error that is not about the file itself comes from
+// creating the temp file in, or renaming it within, the map's folder.
+func commitFailure(absPath string, err error) (*mcp.CallToolResult, error) {
+	switch {
+	case errors.Is(err, xmind.ErrMapReadOnly):
+		return mcp.NewToolResultError(fmt.Sprintf("cannot save map at %s: the file is read-only", absPath)), nil
+	case errors.Is(err, errReadOnlyFS):
+		return mcp.NewToolResultError(fmt.Sprintf("cannot save map at %s: %v", absPath, pathErrorReason(err))), nil
+	case errors.Is(err, fs.ErrPermission):
+		return mcp.NewToolResultError(fmt.Sprintf(
+			"cannot save map at %s: %v (saving needs write access to the map's folder)", absPath, pathErrorReason(err))), nil
+	}
+	return nil, fmt.Errorf("write map: %w", err)
+}
+
+// statAndReadMap checks that absPath exists, reads the workbook, and maps failures per AGENTS.md
+// Error Handling: a missing file, a path that can't be accessed, and a file that is not a valid
+// map are tool errors; any other stat failure is a protocol error.
 func statAndReadMap(absPath string) (sheets []xmind.Sheet, toolErr *mcp.CallToolResult, err error) {
 	if _, statErr := os.Stat(absPath); statErr != nil {
-		if os.IsNotExist(statErr) {
-			return nil, mcp.NewToolResultError(fmt.Sprintf("file not found: %s", absPath)), nil
+		if accessErr := pathAccessToolError(absPath, statErr); accessErr != nil {
+			return nil, accessErr, nil
 		}
 		return nil, nil, fmt.Errorf("stat file: %w", statErr)
 	}
@@ -352,8 +416,8 @@ func statAndReadMap(absPath string) (sheets []xmind.Sheet, toolErr *mcp.CallTool
 // return without committing (e.g. a sheet-not-found tool error or a no-change path).
 func statAndOpenMapForUpdate(absPath string) (sheets []xmind.Sheet, mw *xmind.MapWriter, toolErr *mcp.CallToolResult, err error) {
 	if _, statErr := os.Stat(absPath); statErr != nil {
-		if os.IsNotExist(statErr) {
-			return nil, nil, mcp.NewToolResultError(fmt.Sprintf("file not found: %s", absPath)), nil
+		if accessErr := pathAccessToolError(absPath, statErr); accessErr != nil {
+			return nil, nil, accessErr, nil
 		}
 		return nil, nil, nil, fmt.Errorf("stat file: %w", statErr)
 	}

@@ -1,13 +1,18 @@
 package handler
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mab-go/xmind-mcp/internal/xmind"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func TestFlattenToOutlineMarkdownKitchenSink(t *testing.T) {
@@ -799,6 +804,78 @@ func TestImportFromOutlineRootTitleNotString(t *testing.T) {
 	}
 	if msg := textContent(t, res); !strings.Contains(msg, "root_title") {
 		t.Errorf("error message = %q", msg)
+	}
+}
+
+// TestOutlineToolsRejectNonStringArgs checks that flatten_to_outline and import_from_outline
+// reject a non-string format, topic_id, sheet_id or parent_id instead of treating it as
+// absent, and leave the file unchanged.
+func TestOutlineToolsRejectNonStringArgs(t *testing.T) {
+	h := NewXMindHandler()
+	for _, tc := range []struct {
+		name, key string
+		fn        func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+		args      func(path, sheetID string) map[string]any
+	}{
+		{"flatten format", "format", h.FlattenToOutline, func(path, sheetID string) map[string]any {
+			return map[string]any{"path": path, "sheet_id": sheetID, "format": float64(5)}
+		}},
+		{"flatten topic_id", "topic_id", h.FlattenToOutline, func(path, sheetID string) map[string]any {
+			return map[string]any{"path": path, "sheet_id": sheetID, "topic_id": float64(5)}
+		}},
+		{"import sheet_id", "sheet_id", h.ImportFromOutline, func(path, _ string) map[string]any {
+			return map[string]any{"path": path, "outline": "- x", "sheet_id": float64(5)}
+		}},
+		{"import parent_id", "parent_id", h.ImportFromOutline, func(path, sheetID string) map[string]any {
+			return map[string]any{"path": path, "outline": "- x", "sheet_id": sheetID, "parent_id": float64(5)}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, sheetID, _, _ := newABCMap(t, h)
+			before := readFileBytes(t, path)
+			res := callTool(t, tc.fn, tc.args(path, sheetID))
+			want := "invalid argument " + tc.key + ": expected a string"
+			if got := textContent(t, res); !res.IsError || got != want {
+				t.Errorf("result = %q (isError %t), want tool error %q", got, res.IsError, want)
+			}
+			if !bytes.Equal(before, readFileBytes(t, path)) {
+				t.Error("call changed the file")
+			}
+		})
+	}
+}
+
+// TestImportFromOutlineReadOnlyMap checks that both import paths, into a new sheet and under an
+// existing topic, refuse a read-only map with a tool error and leave it unchanged.
+func TestImportFromOutlineReadOnlyMap(t *testing.T) {
+	h := NewXMindHandler()
+	for _, tc := range []struct {
+		name string
+		args func(path, sheetID, rootID string) map[string]any
+	}{
+		{"new sheet", func(path, _, _ string) map[string]any {
+			return map[string]any{"path": path, "outline": "- x"}
+		}},
+		{"under a topic", func(path, sheetID, rootID string) map[string]any {
+			return map[string]any{"path": path, "outline": "- x", "sheet_id": sheetID, "parent_id": rootID}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, sheetID, rootID, _ := newABCMap(t, h)
+			before := readFileBytes(t, path)
+			t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+			if err := os.Chmod(path, 0o444); err != nil {
+				t.Fatal(err)
+			}
+			res := callTool(t, h.ImportFromOutline, tc.args(path, sheetID, rootID))
+			want := "cannot save map at " + path + ": the file is read-only"
+			if got := textContent(t, res); !res.IsError || got != want {
+				t.Errorf("result = %q (isError %t), want tool error %q", got, res.IsError, want)
+			}
+			if !bytes.Equal(before, readFileBytes(t, path)) {
+				t.Error("call changed the file")
+			}
+		})
 	}
 }
 
