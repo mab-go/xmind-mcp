@@ -26,6 +26,7 @@ codecov.yml               — Codecov config; informational (non-blocking) proje
 cmd/
   xmind-mcp/
     main.go               — cobra command; calls server.RunStdioServer()
+    main_test.go          — parseLogLevel; the command: --version output, invalid --log-level flag and env values, the level taken from the flag, else the env var, a clean stop at stdin EOF and (on Unix) on an interrupt or SIGTERM
   gen-example/
     main.go               — dev utility; generates the README example map via xmind package directly
 internal/
@@ -60,6 +61,7 @@ internal/
       testhelpers_test.go — TestMain (fails fast if the fixture is a Git LFS stub) and copyFixture
   version/
     version.go            — build metadata (Version, Commit, Date) injected via ldflags
+    version_test.go       — ShortCommit cuts Commit to 12 characters and keeps a shorter one whole
   xmind/
     types.go              — Go structs mirroring the content.json schema
     json_codec.go         — custom JSON: per-type field tables with decode policies; unknown and undecodable keys kept raw; the save check (checkSavable)
