@@ -10,6 +10,6 @@ const (
 	eventServerStarted     logging.Event = "server.started"     // Server initialized (after-initialize hook)
 	eventServerStarting    logging.Event = "server.starting"    // Server initializing (before-initialize hook)
 	eventServerStopped     logging.Event = "server.stopped"     // Server shutdown complete
-	eventServerStopping    logging.Event = "server.stopping"    // Received shutdown signal
+	eventServerStopping    logging.Event = "server.stopping"    // Stdin closed or a shutdown signal arrived
 	eventToolPanic         logging.Event = "tool.panic"         // Tool handler panicked; recovered as a protocol error
 )
