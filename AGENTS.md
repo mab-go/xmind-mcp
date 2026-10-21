@@ -35,7 +35,7 @@ internal/
     tools.go              — tool definitions as package-level var declarations
     tools_test.go         — asserts every tool's title and annotation hints, and that whole-number parameters are declared as non-negative integers
     output_schema_test.go — asserts which tools declare an outputSchema and that their structured output matches it
-    error_contract_test.go — calls every tool with bad paths, bad IDs, bad numbers, unreachable paths and read-only maps; each must return a tool error and change nothing on disk
+    error_contract_test.go — calls every tool with bad paths, bad IDs, bad numbers, unreachable paths, read-only maps and maps with a wrong-shaped field; each must return a tool error and change nothing on disk (read-only tools still read a map with a wrong-shaped field)
     hooks.go              — MCP lifecycle hooks (initialize and server/discover)
     recovery.go           — tool-handler middleware: recovers panics, logs tool.panic with a stack trace
     instructions.go       — server instructions sent in the initialize and server/discover results
@@ -55,18 +55,18 @@ internal/
       utils.go            — handlers for Tier 4: utility tools
       utils_test.go       — tests for the Tier 4 handlers, including outline round trips and find-and-replace; outline parser tests and fuzz targets
       integration_test.go — multi-tool workflows and edge cases (find then mutate, build from scratch, fixture preservation, Unicode)
-      update_integration_test.go — MapWriter paths through the handlers (no-match close, post-open tool errors, zip-entry preservation)
+      update_integration_test.go — MapWriter paths through the handlers (no-match close, post-open tool errors, zip-entry preservation, a wrong-shaped field: reads work, saves refused)
       testhelpers_test.go — TestMain (fails fast if the fixture is a Git LFS stub) and copyFixture
   version/
     version.go            — build metadata (Version, Commit, Date) injected via ldflags
   xmind/
     types.go              — Go structs mirroring the content.json schema
-    json_codec.go         — custom JSON: preserve unknown keys, notes shape
-    json_codec_test.go    — unknown-key and notes round trips
+    json_codec.go         — custom JSON: per-type field tables with decode policies; unknown and undecodable keys kept raw; the save check (checkSavable)
+    json_codec_test.go    — unknown-key, notes and malformed-value round trips, field tables against the structs; codec round-trip fuzz target
     reader.go             — open zip, parse content.json → []Sheet (ReadMap, parseContentFromZip)
     reader_test.go        — ReadMap errors, fixture parsing, and the WriteMap round trip
     writer.go             — serialize []Sheet → content.json, write back to zip (WriteMap, writeMapBody)
-    writer_test.go        — WriteMap/CreateNewMap: entry preservation, atomic failure, no-overwrite, file modes, read-only maps refused
+    writer_test.go        — WriteMap/CreateNewMap: entry preservation, atomic failure, no-overwrite, file modes, read-only maps refused, undecodable values kept or refused
     update.go             — OpenMapForUpdate/MapWriter: single-open read-then-commit handle for mutations
     update_test.go        — Commit/WriteMap parity, MapWriter lifecycle guards, writes through symlinks
     pathlock.go           — lockPath/resolveMapPath: in-process per-file write lock, keyed by the symlink-resolved path
@@ -104,7 +104,7 @@ Before touching any code, read these files in order:
 
 1. **`internal/xmind/types.go`** — the Go struct definitions that mirror `content.json`. Everything else depends on getting this right.
 2. **`internal/xmind/reader.go`** and **`writer.go`** — the zip I/O layer. Understand the read/write lifecycle before writing any handler.
-3. **`internal/xmind/json_codec.go`** — the custom marshal/unmarshal logic that preserves unknown keys. Read this before touching any struct that has a custom codec.
+3. **`internal/xmind/json_codec.go`** — the custom marshal/unmarshal logic that preserves unknown keys and values it can't decode. Read this before touching any struct that has a custom codec.
 
 **Prefer LSP for semantic Go queries.** For finding definitions, references,
 implementations, call hierarchy, or type signatures in Go code, use the LSP
@@ -134,6 +134,8 @@ Every mutating tool call follows this exact pattern — do not deviate from it:
 
 **Read-only maps are not replaced.** The swap needs write access only to the map's folder, so a rename would replace even a map the server can't write. Before writing anything, `writeMapBody` refuses with `xmind.ErrMapReadOnly` (which matches `fs.ErrPermission`) a map with no write permission bits (even as root) or one it is refused opening for writing (an owner without the write bit on a group-writable map, an ACL, an immutable file), so `WriteMap` and `Commit` leave it as it is. An edit also needs write access to the map's folder, because the temp file is created there. Handlers report both cases as tool errors (see `commitFailure` under Argument extraction).
 
+**Maps with a wrong-shaped field are not replaced.** A value the codec can't decode is kept raw (see `content.json` fidelity below). When it is in a `strict` field, one some handler writes, a save could overwrite or drop it. So `OpenMapForUpdate` records it, and `Commit` refuses with `xmind.ErrUndecodableField` before writing anything, even when the change removed the topic that held it. `writeMapBody` also checks the sheets it is given, which covers `WriteMap`. Reads, and calls that change nothing (they never commit), still work. Handlers report the refusal as a tool error naming the field (see `commitFailure`); the fix is to edit the file outside xmind-mcp.
+
 **Single-open mutation path.** Mutating handlers open the `.xmind` once via `xmind.OpenMapForUpdate` (through the `statAndOpenMapForUpdate` / `loadSheet…ForUpdate` helpers), which returns the parsed `[]Sheet` plus a `*xmind.MapWriter` that keeps the zip reader open. The handler mutates the sheets in memory and calls `mw.Commit(sheets)` to persist them, raw-copying the still-open non-`content.json` entries (steps 1–5 above happen across one file open instead of two). `Commit` closes the read handle *before* the atomic swap, so on Windows the swap runs with no open handle on the original. `Commit` is single-use (a second `Commit`, or one after `Close`, errors). The free-standing `xmind.WriteMap` (which re-reads the file fresh) is retained for tests and any read-fresh caller; `xmind.CreateNewMap` writes brand-new maps and never overwrites: it claims the destination with `O_CREATE|O_EXCL` before writing (an existing path fails with an error wrapping `fs.ErrExist`), renames the finished temp file over that empty placeholder, and removes the placeholder on failure. Callers must not add their own existence check, which would race with a concurrent creator; to replace a file deliberately (e.g. `cmd/gen-example`), remove it first. The temp-then-swap mechanics below are unchanged and shared by both `WriteMap` and `Commit` via the internal `writeMapBody`, which swaps onto the symlink-resolved path (creating the temp file in the real file's directory), so an edit through a symlink to the map updates the real file and leaves the link in place.
 
 **Per-path write lock.** Steps 1–6 hold an in-process lock for the file (`lockPath` in `internal/xmind/pathlock.go`), so overlapping tool calls (mcp-go runs `tools/call` on a worker pool) on one file run one at a time instead of each committing over the others' changes. `OpenMapForUpdate` acquires it and the `MapWriter` holds it until a successful `Commit` or `Close`; the mandatory `defer mw.Close()` is what releases it on every other path, so handlers need no lock code of their own. `WriteMap` holds it for its own re-read and swap (not for a caller's earlier read), and `CreateNewMap` holds it from before the `O_EXCL` claim until the rename, so a locked writer never opens the empty placeholder. The key is the absolute path with symlinks resolved (best effort: the directory alone for a file not yet created), the same path the swap replaces, so a symlinked directory or a symlink to the file shares the real file's lock. Reads take no lock: the rename is atomic, so a reader sees the old or the new file (or, during `CreateNewMap`, the empty placeholder). The lock is not reentrant: while a goroutine holds a `MapWriter` for a file, it must not call `OpenMapForUpdate`, `WriteMap`, or `CreateNewMap` on that file. What it does **not** cover:
@@ -144,11 +146,19 @@ Every mutating tool call follows this exact pattern — do not deviate from it:
 
 The temp-then-swap happens in `replaceTempFile` (`internal/xmind/atomic_replace.go`). On Unix, `os.Rename` atomically replaces the destination. On Windows, `os.Rename` cannot overwrite an existing file, so `replaceViaBackup` moves the original aside to a uniquely named backup first, renames the temp into place, then removes the backup — restoring the backup if the rename fails. This keeps the original recoverable on Windows; never reintroduce a plain remove-then-rename there, which can destroy the original if the rename fails.
 
-### `content.json` fidelity (unknown keys)
+### `content.json` fidelity (unknown and undecodable keys)
 
-Major JSON object types in the workbook tree use custom `MarshalJSON` / `UnmarshalJSON` in **`internal/xmind/json_codec.go`**. Unknown keys on those objects are stored in an unexported `extra` field (a `map[string]json.RawMessage` with no JSON tag; the custom marshaler never reflects over the struct directly) and merged back on marshal so XMind-specific or forward-compatible properties survive a read → edit → write cycle.
+Major JSON object types in the workbook tree use custom `MarshalJSON` / `UnmarshalJSON` in **`internal/xmind/json_codec.go`**. Unknown keys on those objects, and known keys whose value has an unexpected shape, are stored in an unexported `extra` field (a `map[string]json.RawMessage` with no JSON tag; the custom marshaler never reflects over the struct directly) and written back on marshal, so XMind-specific or forward-compatible properties survive a read → edit → write cycle.
 
-When you add a **new first-class field** to `Sheet`, `Topic`, `Children`, `Relationship`, `Boundary`, the summary-range `Summary`, `Marker`, `Position`, `TopicImage`, `AttributedTitleItem`, `Notes`, or `NoteContent`, you **must** add the JSON key to the corresponding allowlist in `json_codec.go` (e.g. `topicKnownKeys`, `sheetKnownKeys`, or the `deleteKeys(...)` list for that type — `Notes` uses `"plain"`/`"realHTML"`, `NoteContent` uses `"content"`). Otherwise the new field will be treated as opaque preserved data and will not populate the typed field.
+Each of these types has a field table in `json_codec.go` (`topicFields`, `sheetFields`, `markerFields`, …) that lists its JSON keys in struct order, each with a policy. Decoding reads each key into a fresh value and assigns it only on success. A key that fails stays in `extra` and its typed field stays empty, so the map still reads. On marshal, an `extra` value is written over the typed output, except for a known field whose typed value is non-empty: a handler set it, and its value wins. That exception also lets `trackTopicChanges` see the edit. The policies:
+
+- **`strict`**: some handler writes the field on an existing object (`Topic` `id`, `title`, `labels`, `notes`, `children` and the rest, `Summary` and `Boundary` ranges, `Sheet` `revisionId`, `relationships` and `rootTopic`). A raw value blocks every save to the map (see Read/Write Lifecycle).
+- **`keepRaw`**: no handler writes the field. A raw value is written back unchanged.
+- **`passthrough`**: `Sheet` `theme` and `extensions`, copied as raw JSON and never decoded.
+
+Tool responses never carry a raw value: `xmind.Marker` goes into them through `Marker.WithoutRawFields`, because its output schema needs a string `markerId`.
+
+When you add a **new first-class field** to `Sheet`, `Topic`, `Children`, `Relationship`, `Boundary`, the summary-range `Summary`, `Marker`, `Position`, `TopicImage`, `AttributedTitleItem`, `Notes`, or `NoteContent`, you **must** add its JSON key to that type's field table, with a policy: `strict` if any handler writes it on an existing object, `keepRaw` otherwise. `TestCodecFieldTablesMatchStructs` fails until the table matches the struct, and checks that the Topic, Sheet and Position marshalers write the same keys. A handler that starts writing a `keepRaw` field must move it to `strict`, so an edit never replaces a raw value the tools could not show.
 
 **Limitation:** Sibling keys on each **`Extension`** object (alongside `provider`, `content`, `resourceRefs`) are still dropped. Non–`content.json` zip entries continue to be preserved by `WriteMap` and `MapWriter.Commit` via raw copy.
 
@@ -186,7 +196,7 @@ Every tool must declare its display title and MCP behavior hints with `withAnnot
 | `effectDestructive` | may change or remove existing content, and a repeat call can change it again |
 | `effectDestructiveIdempotent` | may change or remove existing content, and a repeat call has no further effect (renames, sets, deletes) |
 
-`openWorldHint` is always `false`: every tool touches only the local file named by `path`. The `toolEffect` zero value is invalid and an unknown effect makes `withAnnotations` panic; since tools are package-level vars, that fails every test in the package and stops the binary at startup. When adding an effect, add a `case` for it. Add each new tool to `expectedAnnotations` in `internal/server/tools_test.go`; the test fails for any registered tool missing from that table. Also add it to `contractCases` in `internal/server/error_contract_test.go`, with base arguments that succeed on that test's fixture map and the names of its ID arguments; `TestToolErrorContractCoversAllTools` fails for any registered tool missing from that table, and `TestToolErrorContract` then checks the new tool returns tool errors, never protocol errors or writes, for bad paths, bad IDs, bad numbers, unreachable paths and read-only maps. It finds a tool's integer parameters in its input schema, so a new one is tested without editing the table.
+`openWorldHint` is always `false`: every tool touches only the local file named by `path`. The `toolEffect` zero value is invalid and an unknown effect makes `withAnnotations` panic; since tools are package-level vars, that fails every test in the package and stops the binary at startup. When adding an effect, add a `case` for it. Add each new tool to `expectedAnnotations` in `internal/server/tools_test.go`; the test fails for any registered tool missing from that table. Also add it to `contractCases` in `internal/server/error_contract_test.go`, with base arguments that succeed on that test's fixture map and the names of its ID arguments; `TestToolErrorContractCoversAllTools` fails for any registered tool missing from that table, and `TestToolErrorContract` then checks the new tool returns tool errors, never protocol errors or writes, for bad paths, bad IDs, bad numbers, unreachable paths, read-only maps and maps with a wrong-shaped field. It finds a tool's integer parameters in its input schema, so a new one is tested without editing the table.
 
 A tool whose handler returns `jsonResult` must also declare its output schema with `handler.OutputSchema[handler.<Type>]()`, right after `withAnnotations`. `<Type>` is the exported struct the handler passes to `jsonResult` (e.g. `handler.OpenMapResponse`). Add the tool to `jsonOutputTools` in `internal/server/output_schema_test.go`, and add cases to `TestStructuredOutputMatchesSchema` that cover each success return path. Clients may check results against the schema, so a wrong schema on a writing tool can look like a failure after the file was saved. `OutputSchema` builds the schema with `jsonschema.For`, which requires fields without `omitempty` and rejects keys the struct does not name. A recursive type, or a type with custom JSON (like `xmind.Marker`, which writes back unknown keys), needs an entry in `outputTypeSchemas` in `handler/schema.go`. Like `withAnnotations`, `OutputSchema` panics on a schema error.
 
@@ -264,7 +274,7 @@ if err := mw.Commit(sheets); err != nil {
 }
 ```
 
-Return a failed `Commit` through `commitFailure` (`handler.go`), never as a bare `write map` error. It returns a tool error ("cannot save map at …") when the map file is read-only (`xmind.ErrMapReadOnly`), the filesystem is read-only (`errReadOnlyFS`: `EROFS`, or `ERROR_WRITE_PROTECT` on Windows), or the map's folder can't be written (any other `fs.ErrPermission`), naming that cause; the map is unchanged in each case. Any other failure is a `write map` protocol error.
+Return a failed `Commit` through `commitFailure` (`handler.go`), never as a bare `write map` error. It returns a tool error ("cannot save map at …") when the map holds a value it could not decode in a field the tools edit (`xmind.ErrUndecodableField`), the map file is read-only (`xmind.ErrMapReadOnly`), the filesystem is read-only (`errReadOnlyFS`: `EROFS`, or `ERROR_WRITE_PROTECT` on Windows), or the map's folder can't be written (any other `fs.ErrPermission`), naming that cause; the map is unchanged in each case. Any other failure is a `write map` protocol error.
 
 **Idempotent tools must not write when nothing changes.** A tool annotated `effectAdditiveIdempotent` or `effectDestructiveIdempotent` (see Tool definitions) must leave the file byte-identical when a call changes nothing, so a repeated call has no effect. Do not bump `revisionId` and commit unconditionally. Use the helpers in `mutate.go`: `commitSheetChange(mw, sheets, sh, changed)` bumps the sheet's `revisionId` and commits only when `changed` is true. Compute `changed` from a specific check (`setTopicTitle`, `attachedOrderMatches`) or wrap the mutation in `trackTopicChanges`, which compares JSON snapshots taken before and after. When the mutation itself is not reversible in place, check before mutating and return early, as `MoveTopic` does with `moveIsNoOp`. The no-op path returns the same success response as a real change. `TestIdempotentToolsRepeatDoesNotWrite` in `mutate_test.go` covers each idempotent tool.
 
@@ -415,7 +425,7 @@ For zip and JSON handling, use Go stdlib only: `archive/zip` and `encoding/json`
 
 ### Fuzz targets
 
-The pure parsers and converters (whole-number arguments, summary ranges, note HTML, outline parsing, and the outline flatten/import round trip) have Go fuzz targets (`FuzzXxx`), each in the `_test.go` file next to its function's unit tests. A target states a property that must hold for every input, not one expected output. Its `f.Add` seeds run under plain `go test`, so CI runs them; fuzzing itself is local only. `make fuzz` runs every target in turn for `FUZZTIME` (default 30s; e.g. `make fuzz FUZZTIME=2m`). Run it after changing a function that has a target. When fuzzing finds a failure, Go saves the input under `<package>/testdata/fuzz/<FuzzName>/`; commit that file with the fix so it stays as a regression seed, and add the directory to Project Structure.
+The pure parsers and converters (whole-number arguments, summary ranges, note HTML, outline parsing, the outline flatten/import round trip, and the `content.json` codec round trip) have Go fuzz targets (`FuzzXxx`), each in the `_test.go` file next to its function's unit tests. A target states a property that must hold for every input, not one expected output. Its `f.Add` seeds run under plain `go test`, so CI runs them; fuzzing itself is local only. `make fuzz` runs every target in turn for `FUZZTIME` (default 30s; e.g. `make fuzz FUZZTIME=2m`). Run it after changing a function that has a target. When fuzzing finds a failure, Go saves the input under `<package>/testdata/fuzz/<FuzzName>/`; commit that file with the fix so it stays as a regression seed, and add the directory to Project Structure.
 
 ### Verification before you finish
 
@@ -430,7 +440,7 @@ Also verify that documentation reflects the change before finishing. Update **`A
 | New file added or removed | `Project Structure` tree in `AGENTS.md` |
 | New handler helper added to `handler.go` | Appropriate subsection in `AGENTS.md` (traversal/lookup table for tree helpers; Text response helper for `textResult` / `jsonResult`) |
 | New tool registered, renamed, or removed | `expectedAnnotations` in `internal/server/tools_test.go` and `contractCases` in `internal/server/error_contract_test.go`; Tier tables and tool count in `README.md`; steps, coverage, and tool count in the `xmind-mcp-smoke-test` skill; tool leaves, tier notes, and counts in `cmd/gen-example/main.go` (then `make gen-example` and retake the README PNG); `serverInstructions` if the workflow changes; Conventions section in `AGENTS.md` if a new pattern is introduced |
-| New struct field or codec allowlist entry | Schema Critical Notes in `AGENTS.md` |
+| New struct field or codec field-table entry | Schema Critical Notes in `AGENTS.md` |
 | New convention established | `Conventions` section in `AGENTS.md` |
 | New `.cursor/rules/` or `.agents/skills/` file | Reflect in `AGENTS.md` if it affects agent behavior |
 
@@ -442,7 +452,7 @@ This is the most important convention to get right. There are two distinct failu
 
 ### Tool errors (expected / recoverable)
 
-Topic not found, file doesn't exist, bad arguments, file is not a valid `.xmind`, a path the server can't access (permission denied, not a directory, name too long, symlink loop, invalid characters such as NUL), a save refused because the map file or its filesystem is read-only or its folder can't be written — these are conditions the model can read and act on. Return them as tool-level errors:
+Topic not found, file doesn't exist, bad arguments, file is not a valid `.xmind`, a path the server can't access (permission denied, not a directory, name too long, symlink loop, invalid characters such as NUL), a save refused because the map file or its filesystem is read-only, its folder can't be written, or it holds a value with an unexpected shape in a field the tools edit — these are conditions the model can read and act on. Return them as tool-level errors:
 
 ```go
 return mcp.NewToolResultError("topic not found: no topic with title \"Foo\" exists"), nil
@@ -568,7 +578,7 @@ The codebase is organized in layers. When making changes, understand which layer
 | Server wiring | `internal/server/server.go`, `tools.go`, `hooks.go`, `recovery.go`, `instructions.go` | Handlers |
 | Entry point | `cmd/xmind-mcp/main.go` | Server wiring |
 
-Changes to the Schema layer (adding/removing struct fields, modifying codec allowlists) will ripple into handlers. Changes to handlers are self-contained as long as the I/O layer API is stable. Never import handler packages from the xmind package or vice versa.
+Changes to the Schema layer (adding/removing struct fields, modifying codec field tables) will ripple into handlers. Changes to handlers are self-contained as long as the I/O layer API is stable. Never import handler packages from the xmind package or vice versa.
 
 ---
 

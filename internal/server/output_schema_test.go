@@ -62,6 +62,24 @@ func TestStructuredOutputMatchesSchema(t *testing.T) {
 	t.Run("duplicate_topic", func(t *testing.T) { checkDuplicateTopic(t, c) })
 	t.Run("move_topic", func(t *testing.T) { checkMoveTopic(t, c) })
 	t.Run("find_and_replace", func(t *testing.T) { checkFindAndReplace(t, c) })
+	t.Run("raw markerId", func(t *testing.T) { checkRawMarkerID(t, c) })
+}
+
+// checkRawMarkerID runs the tools that return markers on a topic whose markerId could not be
+// decoded. The output must still match the schema, which wants a string markerId: it reads as
+// "", and the marker's unknown key still shows.
+func checkRawMarkerID(t *testing.T, c *outputChecker) {
+	path := filepath.Join(t.TempDir(), "m.xmind")
+	data := fixtureWithField(t, contractFixture(t), "c1", "markers", []any{map[string]any{"markerId": 5, "future": 1}})
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"xmind_get_topic_properties", "xmind_get_subtree"} {
+		out := c.call(t, tool, map[string]any{"path": path, "sheet_id": "s1", "topic_id": "c1"})
+		if want := `"markers":[{"future":1,"markerId":""}]`; !strings.Contains(out, want) {
+			t.Errorf("%s: output %s, want it to contain %s", tool, out, want)
+		}
+	}
 }
 
 func TestOutputSchemaRejectsUnknownKeys(t *testing.T) {

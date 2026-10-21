@@ -14,7 +14,7 @@ If your change falls into any category in the table below, update the correspond
 | New file added or removed | `Project Structure` tree in `AGENTS.md` |
 | New handler helper added to `handler.go` | Appropriate subsection in `AGENTS.md` (traversal/lookup table for tree helpers; Text response helper for `textResult` / `jsonResult`) |
 | New tool registered, renamed, or removed | Tier tables and tool count in `README.md`; steps, coverage, and tool count in the `xmind-mcp-smoke-test` skill; tool leaves, tier notes, and counts in `cmd/gen-example/main.go` (then `make gen-example` and retake the README PNG); `serverInstructions` if the workflow changes; Conventions section in `AGENTS.md` if a new pattern is introduced |
-| New struct field or codec allowlist entry | Schema Critical Notes in `AGENTS.md` |
+| New struct field or codec field-table entry | Schema Critical Notes in `AGENTS.md` |
 | New convention established | `Conventions` section in `AGENTS.md` |
 | New `.cursor/rules/` or `.agents/skills/` file | Reflect in `AGENTS.md` if it affects agent behavior |
 

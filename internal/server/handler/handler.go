@@ -374,13 +374,16 @@ func pathAccessToolError(absPath string, err error) *mcp.CallToolResult {
 	return nil
 }
 
-// commitFailure maps a failed mw.Commit to the handler's return values. A map file that is
-// read-only, a read-only filesystem, or a folder that can't be written is a tool error the
-// caller can fix (the map was left unchanged); any other failure is a protocol error. Each tool
-// error names its own cause: a permission error that is not about the file itself comes from
-// creating the temp file in, or renaming it within, the map's folder.
+// commitFailure maps a failed mw.Commit to the handler's return values. A map holding a value
+// that could not be decoded in a field the tools edit, a map file that is read-only, a
+// read-only filesystem, or a folder that can't be written is a tool error the caller can fix
+// (the map was left unchanged); any other failure is a protocol error. Each tool error names
+// its own cause: a permission error that is not about the file itself comes from creating the
+// temp file in, or renaming it within, the map's folder.
 func commitFailure(absPath string, err error) (*mcp.CallToolResult, error) {
 	switch {
+	case errors.Is(err, xmind.ErrUndecodableField):
+		return mcp.NewToolResultError(fmt.Sprintf("cannot save map at %s: %v; the map is unchanged", absPath, err)), nil
 	case errors.Is(err, xmind.ErrMapReadOnly):
 		return mcp.NewToolResultError(fmt.Sprintf("cannot save map at %s: the file is read-only", absPath)), nil
 	case errors.Is(err, errReadOnlyFS):

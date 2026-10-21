@@ -35,7 +35,7 @@ For each category, here is **how** to verify -- not just what to check.
   - Generated artifacts not regenerated after their source changes
   - In this project, also check for:
     - A new tool not registered in `internal/server/server.go`, or missing from `expectedAnnotations` in `internal/server/tools_test.go` or `contractCases` in `internal/server/error_contract_test.go`
-    - A new JSON key on a tree type missing from its allowlist in `internal/xmind/json_codec.go`, so it is kept as opaque data instead of populating the typed field
+    - A new JSON key on a tree type missing from that type's field table in `internal/xmind/json_codec.go`, so it is kept as opaque data instead of populating the typed field; or a key given `keepRaw` although a handler writes it on an existing object, which needs `strict`
     - A new idempotent tool missing from `idempotentToolCases` in `internal/server/handler/mutate_test.go`; the idempotency tests skip it without failing
     - A new or renamed tool missing from the Tools section of `README.md`, the `xmind-mcp-smoke-test` skill, or the example map in `cmd/gen-example` (all three state the tool count; regenerate the map with `make gen-example`)
     - A tool whose handler returns `jsonResult` without `handler.OutputSchema[...]`, missing from `jsonOutputTools` in `internal/server/output_schema_test.go`, or without a `TestStructuredOutputMatchesSchema` case for each success path

@@ -98,7 +98,8 @@ type TopicImage struct {
 
 // Notes holds plain and HTML note content.
 // Either or both of Plain and RealHTML may be set; omitted keys are not reintroduced on marshal.
-// Unknown sibling keys are preserved via extra, like other workbook-tree objects.
+// Unknown sibling keys, and values that could not be decoded, are kept in extra, like other
+// workbook-tree objects.
 type Notes struct {
 	Plain    *NoteContent `json:"plain,omitempty"`
 	RealHTML *NoteContent `json:"realHTML,omitempty"`

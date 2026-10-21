@@ -82,19 +82,25 @@ func TestReadMapErrorNoContentJSON(t *testing.T) {
 	}
 }
 
-func TestReadMapErrorMalformedJSON(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "badjson.xmind")
+// writeContentJSONMap writes a map whose content.json is contentJSON, plus a metadata.json
+// entry, to a new temp directory and returns its path.
+func writeContentJSONMap(t *testing.T, contentJSON string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "m.xmind")
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = f.Close() }()
 	zw := zip.NewWriter(f)
-	w, err := zw.Create("content.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write([]byte("{not valid json")); err != nil {
-		t.Fatal(err)
+	for _, e := range []struct{ name, body string }{{"content.json", contentJSON}, {"metadata.json", "{}"}} {
+		w, err := zw.Create(e.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(e.body)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
@@ -102,7 +108,12 @@ func TestReadMapErrorMalformedJSON(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, err = ReadMap(path)
+	return path
+}
+
+func TestReadMapErrorMalformedJSON(t *testing.T) {
+	path := writeContentJSONMap(t, "{not valid json")
+	_, err := ReadMap(path)
 	if err == nil {
 		t.Fatal("expected error for malformed content.json")
 	}
