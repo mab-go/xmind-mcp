@@ -813,6 +813,75 @@ func TestWritesRefuseUndecodableStrictField(t *testing.T) {
 	}
 }
 
+// TestWritesRefuseMapTooLarge checks both writes refuse sheets whose content.json would be over
+// either limit, leaving the map untouched, so the server never writes a map it can't read back.
+// Each write reads the map at the normal limits and lowers one before saving.
+func TestWritesRefuseMapTooLarge(t *testing.T) {
+	const content = `[{"id":"s1","class":"sheet","title":"S","rootTopic":{"id":"r","title":"R"}}]`
+	writes := []struct {
+		name  string
+		write func(t *testing.T, dst string, lower func()) error
+	}{
+		{"Commit", func(t *testing.T, dst string, lower func()) error {
+			sheets, mw, err := OpenMapForUpdate(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = mw.Close() }()
+			lower()
+			return mw.Commit(sheets)
+		}},
+		{"WriteMap", func(t *testing.T, dst string, lower func()) error {
+			sheets, err := ReadMap(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lower()
+			return WriteMap(dst, sheets)
+		}},
+	}
+	for _, limit := range []struct {
+		name     string
+		size     uint64
+		elements int
+		want     string
+	}{
+		{"bytes", 1, maxContentJSONElements, "bytes, over the 1-byte limit"},
+		{"elements", maxContentJSONSize, 1, "JSON elements, over the 1-element limit"},
+	} {
+		for _, w := range writes {
+			t.Run(limit.name+"/"+w.name, func(t *testing.T) {
+				dst := writeContentJSONMap(t, content)
+				st, err := os.Stat(dst)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before := fileSHA256(t, dst)
+				err = w.write(t, dst, func() { setContentJSONLimits(t, limit.size, limit.elements) })
+				if !errors.Is(err, ErrMapTooLarge) || !strings.Contains(err.Error(), limit.want) {
+					t.Errorf("write: err = %v, want ErrMapTooLarge containing %q", err, limit.want)
+				}
+				assertMapUntouched(t, dst, before, st.Mode().Perm())
+			})
+		}
+	}
+}
+
+// TestCreateNewMapRefusesMapTooLarge checks CreateNewMap refuses sheets whose content.json would
+// be over the limits before it claims the path, so it leaves nothing in the folder.
+func TestCreateNewMapRefusesMapTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	setContentJSONLimits(t, maxContentJSONSize, 1)
+	err := CreateNewMap(filepath.Join(dir, "new.xmind"),
+		[]Sheet{{ID: "s1", Title: "S", RootTopic: Topic{ID: "r", Title: "R"}}})
+	if !errors.Is(err, ErrMapTooLarge) {
+		t.Errorf("CreateNewMap error = %v, want ErrMapTooLarge", err)
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Errorf("folder after a refused create: %v, %v; want empty", entries, err)
+	}
+}
+
 // TestWriteMapRefusesSheetsThatDoNotMarshal checks that WriteMap fails, writing nothing, when the
 // sheets it is given can't be marshaled: here a theme that is not valid JSON, which a read never
 // produces but a caller building sheets could pass.

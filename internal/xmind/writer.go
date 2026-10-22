@@ -187,9 +187,10 @@ func WriteMap(path string, sheets []Sheet) error {
 // (and before the atomic swap) so the caller can close the source handle that backs zr;
 // this lets the swap run with no open handle on the original. On any failure the temp
 // file is removed and the original is left untouched. The new file keeps the original's
-// permission bits. A dst with no write permission bits is refused with ErrMapReadOnly, and
-// sheets holding a value that could not be decoded in a field the tools edit are refused with
-// ErrUndecodableField, both before anything is written.
+// permission bits. A dst with no write permission bits is refused with ErrMapReadOnly,
+// sheets holding a value that could not be decoded in a field the tools edit with
+// ErrUndecodableField, and sheets too large to read back with ErrMapTooLarge, all before
+// anything is written.
 func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func() error) error {
 	data, err := contentJSONToSave(sheets)
 	if err != nil {
@@ -242,7 +243,8 @@ func writeMapBody(dst string, sheets []Sheet, zr *zip.Reader, releaseSource func
 }
 
 // contentJSONToSave returns sheets as content.json, or, unwrapped, checkSavable's error when they
-// hold a value that could not be decoded in a field the tools edit.
+// hold a value that could not be decoded in a field the tools edit, or checkContentJSONLimits'
+// error (ErrMapTooLarge) when the result is too large to read back.
 func contentJSONToSave(sheets []Sheet) ([]byte, error) {
 	if err := checkSavable(sheets); err != nil {
 		return nil, err
@@ -250,6 +252,9 @@ func contentJSONToSave(sheets []Sheet) ([]byte, error) {
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
 		return nil, fmt.Errorf("marshal content.json: %w", err)
+	}
+	if err := checkContentJSONLimits(data); err != nil {
+		return nil, err
 	}
 	return data, nil
 }
@@ -293,6 +298,9 @@ func writableTargetPerm(dst string) (fs.FileMode, error) {
 // the rename or cleanup, so a concurrent OpenMapForUpdate never opens the empty
 // placeholder; it waits and then sees the finished map. Readers take no lock and can
 // still see the placeholder.
+//
+// Sheets whose content.json would be too large to read back are refused with ErrMapTooLarge
+// before the claim, so nothing is created.
 func CreateNewMap(path string, sheets []Sheet) error {
 	_, unlock := lockPath(path)
 	defer unlock()
@@ -300,6 +308,9 @@ func CreateNewMap(path string, sheets []Sheet) error {
 	data, err := marshalSheetsForContentJSON(sheets)
 	if err != nil {
 		return fmt.Errorf("marshal content.json: %w", err)
+	}
+	if err := checkContentJSONLimits(data); err != nil {
+		return err
 	}
 
 	placeholder, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)

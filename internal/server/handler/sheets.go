@@ -249,17 +249,27 @@ func (h *XMindHandler) CreateMap(ctx context.Context, req mcp.CallToolRequest) (
 	// separate existence check here (it would race with a concurrent creator).
 	sh := newSheet(sheetTitle, rootTitle)
 	if err := xmind.CreateNewMap(absPath, []xmind.Sheet{sh}); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return mcp.NewToolResultError(fmt.Sprintf("file already exists: %s", absPath)), nil
-		}
-		if errors.Is(err, fs.ErrNotExist) || isPathAccessError(err) {
-			return mcp.NewToolResultError(fmt.Sprintf("cannot create map at %s: %v", absPath, pathErrorReason(err))), nil
-		}
-		return nil, fmt.Errorf("create map: %w", err)
+		return createFailure(absPath, err)
 	}
 
 	msg := fmt.Sprintf("created map at %s with sheet id %s", absPath, sh.ID)
 	return textResult(msg), nil
+}
+
+// createFailure maps a failed xmind.CreateNewMap to CreateMap's return values, as commitFailure
+// does for saves. A file that already exists, a path that can't be used, or a map over the
+// content.json size limits is a tool error the caller can fix (nothing was created); any other
+// failure is a protocol error.
+func createFailure(absPath string, err error) (*mcp.CallToolResult, error) {
+	switch {
+	case errors.Is(err, fs.ErrExist):
+		return mcp.NewToolResultError(fmt.Sprintf("file already exists: %s", absPath)), nil
+	case errors.Is(err, fs.ErrNotExist), isPathAccessError(err):
+		return mcp.NewToolResultError(fmt.Sprintf("cannot create map at %s: %v", absPath, pathErrorReason(err))), nil
+	case errors.Is(err, xmind.ErrMapTooLarge):
+		return mcp.NewToolResultError(fmt.Sprintf("cannot create map at %s: %v", absPath, err)), nil
+	}
+	return nil, fmt.Errorf("create map: %w", err)
 }
 
 // AddSheet appends a sheet to an existing workbook.
