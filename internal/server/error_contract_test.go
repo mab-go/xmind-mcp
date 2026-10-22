@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"maps"
@@ -14,6 +15,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mab-go/xmind-mcp/internal/server/handler"
@@ -272,9 +274,54 @@ func chmodLock(rel string, mode, restoreMode fs.FileMode) func(*testing.T, contr
 // zipWith returns a zip archive holding one entry.
 func zipWith(t *testing.T, name, content string) []byte {
 	t.Helper()
+	data, err := zipBytes(name, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// zipBytes returns a zip archive holding one entry.
+func zipBytes(name, content string) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	w, err := zw.Create(name)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := w.Write([]byte(content)); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// tooManyElementsMap returns a map over the content.json element limit: a valid sheet whose
+// unknown key holds 500,001 numbers, 500,009 elements in all. Decoding keeps that key as about
+// 1 MB of raw bytes, so the scenario stays cheap even if the check stops working; elements that
+// decode into structs, such as empty sheets, would take over a GB for each tool. It is built
+// once and shared by every tool's scenario.
+var tooManyElementsMap = sync.OnceValues(func() ([]byte, error) {
+	return zipBytes("content.json", `[{"id":"s1","class":"sheet","title":"S","rootTopic":{"id":"r","title":"R"},"x":[0`+
+		strings.Repeat(",0", 500_000)+`]}]`)
+})
+
+// zipWithDeclaredSize returns a zip archive whose content.json stores content uncompressed under
+// a header that declares declared bytes. CreateRaw writes the header's sizes as given, so the
+// archive stays tiny whatever size it declares.
+func zipWithDeclaredSize(t *testing.T, content string, declared uint64) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateRaw(&zip.FileHeader{
+		Name:               "content.json",
+		Method:             zip.Store,
+		CRC32:              crc32.ChecksumIEEE([]byte(content)),
+		CompressedSize64:   uint64(len(content)),
+		UncompressedSize64: declared,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,6 +435,22 @@ func pathScenarios() []contractScenario {
 		{name: "malformed content.json", createWant: "file already exists",
 			setup: func(t *testing.T, e contractEnv) map[string]any {
 				return e.call(e.file(t, "m.xmind", zipWith(t, "content.json", "{")))
+			}},
+		{name: "content.json too large", want: "map is too large", createWant: "file already exists",
+			setup: func(t *testing.T, e contractEnv) map[string]any {
+				return e.call(e.file(t, "m.xmind", zipWithDeclaredSize(t, "[]", 1<<40)))
+			}},
+		{name: "too many JSON elements", want: "JSON elements", createWant: "file already exists",
+			setup: func(t *testing.T, e contractEnv) map[string]any {
+				data, err := tooManyElementsMap()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return e.call(e.file(t, "m.xmind", data))
+			}},
+		{name: "content.json longer than its header", want: "read content.json", createWant: "file already exists",
+			setup: func(t *testing.T, e contractEnv) map[string]any {
+				return e.call(e.file(t, "m.xmind", zipWithDeclaredSize(t, "[]", 1)))
 			}},
 	}
 }

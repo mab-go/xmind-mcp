@@ -298,6 +298,8 @@ func TestCommitFailure(t *testing.T) {
 	}{
 		{"read-only map", fmt.Errorf("write: %w", xmind.ErrMapReadOnly),
 			"cannot save map at /maps/m.xmind: the file is read-only"},
+		{"map too large", fmt.Errorf("%w: content.json has 9 JSON elements, over the 1-element limit", xmind.ErrMapTooLarge),
+			"cannot save map at /maps/m.xmind: map is too large: content.json has 9 JSON elements, over the 1-element limit; the map is unchanged"},
 		{"folder not writable", tempFileErr(syscall.EACCES),
 			"cannot save map at /maps/m.xmind: permission denied (saving needs write access to the map's folder)"},
 		{"read-only filesystem", tempFileErr(errReadOnlyFS),

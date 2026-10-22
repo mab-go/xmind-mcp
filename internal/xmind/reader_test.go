@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -120,6 +121,238 @@ func TestReadMapErrorMalformedJSON(t *testing.T) {
 	if !strings.Contains(err.Error(), "parse content.json") {
 		t.Fatalf("expected parse content.json error, got: %v", err)
 	}
+}
+
+// writeDeclaredSizeMap writes a map whose content.json entry stores data uncompressed under a
+// header that declares declared bytes, to a new temp directory, and returns its path. CreateRaw
+// writes the header's sizes as given, so the file stays tiny whatever size it declares.
+func writeDeclaredSizeMap(t *testing.T, data []byte, declared uint64) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "m.xmind")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	zw := zip.NewWriter(f)
+	w, err := zw.CreateRaw(&zip.FileHeader{
+		Name:               "content.json",
+		Method:             zip.Store,
+		CRC32:              crc32.ChecksumIEEE(data),
+		CompressedSize64:   uint64(len(data)),
+		UncompressedSize64: declared,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// setContentJSONLimits lowers (or raises) the content.json limits for one test and restores them
+// when it ends.
+func setContentJSONLimits(t *testing.T, size uint64, elements int) {
+	t.Helper()
+	oldSize, oldElements := maxContentJSONSize, maxContentJSONElements
+	t.Cleanup(func() { maxContentJSONSize, maxContentJSONElements = oldSize, oldElements })
+	maxContentJSONSize, maxContentJSONElements = size, elements
+}
+
+// assertReadsRefuseMapTooLarge checks ReadMap and OpenMapForUpdate both refuse the map at path
+// with ErrMapTooLarge and a message containing want, and that OpenMapForUpdate returns no
+// MapWriter with its error.
+func assertReadsRefuseMapTooLarge(t *testing.T, path, want string) {
+	t.Helper()
+	if _, err := ReadMap(path); !errors.Is(err, ErrMapTooLarge) || !strings.Contains(err.Error(), want) {
+		t.Errorf("ReadMap error = %v, want ErrMapTooLarge containing %q", err, want)
+	}
+	_, mw, err := OpenMapForUpdate(path)
+	if !errors.Is(err, ErrMapTooLarge) || !strings.Contains(err.Error(), want) {
+		t.Errorf("OpenMapForUpdate error = %v, want ErrMapTooLarge containing %q", err, want)
+	}
+	if mw != nil {
+		_ = mw.Close()
+		t.Error("OpenMapForUpdate returned a MapWriter with its error")
+	}
+}
+
+// TestReadMapErrorContentJSONTooLarge checks ReadMap and OpenMapForUpdate refuse a content.json
+// whose header declares more than maxContentJSONSize without reading it: each file holds two
+// bytes, whatever its header declares.
+func TestReadMapErrorContentJSONTooLarge(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		declared uint64
+	}{
+		{"one byte over the limit", maxContentJSONSize + 1},
+		{"a terabyte (zip64 header)", 1 << 40},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeDeclaredSizeMap(t, []byte("[]"), tc.declared)
+			assertReadsRefuseMapTooLarge(t, path, "bytes uncompressed")
+		})
+	}
+}
+
+// TestReadMapErrorTooManyElements checks ReadMap and OpenMapForUpdate refuse, at the real
+// limits, a content.json with more than maxContentJSONElements elements: a valid sheet whose
+// unknown key holds 500,001 numbers, 500,009 elements in all. Decoding keeps that key as about
+// 1 MB of raw bytes, so the test stays cheap even if the check stops working; elements that
+// decode into structs, such as empty sheets, would take over a GB here.
+func TestReadMapErrorTooManyElements(t *testing.T) {
+	path := writeContentJSONMap(t, `[{"id":"s1","class":"sheet","title":"S","rootTopic":{"id":"r","title":"R"},"x":[0`+
+		strings.Repeat(",0", 500_000)+`]}]`)
+	assertReadsRefuseMapTooLarge(t, path, "JSON elements")
+}
+
+// TestReadMapErrorContentJSONLongerThanHeader checks archive/zip fails an entry that produces
+// more bytes than its header declares. readContentEntry relies on this: it trusts the declared
+// size to bound the read.
+func TestReadMapErrorContentJSONLongerThanHeader(t *testing.T) {
+	path := writeDeclaredSizeMap(t, []byte("[]"), 1)
+	if _, err := ReadMap(path); !errors.Is(err, zip.ErrFormat) {
+		t.Fatalf("ReadMap error = %v, want zip.ErrFormat", err)
+	}
+}
+
+// TestReadContentEntryLimits checks both limits are inclusive: content.json at exactly a limit is
+// read, and one over it is refused with ErrMapTooLarge.
+func TestReadContentEntryLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		content  string
+		size     uint64
+		elements int
+		want     string // "" when the read succeeds
+	}{
+		{"bytes at the limit", "[]", 2, 1, ""},
+		{"bytes over the limit", "[]", 1, 1, "bytes uncompressed"},
+		{"elements at the limit", "[{}]", 4, 2, ""},
+		{"elements over the limit", "[{}]", 4, 1, "JSON elements"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zr, err := zip.OpenReader(writeContentJSONMap(t, tc.content))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = zr.Close() }()
+			var entry *zip.File
+			for _, zf := range zr.File {
+				if zf.Name == "content.json" {
+					entry = zf
+				}
+			}
+			if entry == nil {
+				t.Fatal("no content.json entry")
+			}
+
+			setContentJSONLimits(t, tc.size, tc.elements)
+			data, err := readContentEntry(entry)
+			if tc.want == "" {
+				if err != nil || string(data) != tc.content {
+					t.Errorf("readContentEntry = %q, %v; want %q, nil", data, err, tc.content)
+				}
+				return
+			}
+			if !errors.Is(err, ErrMapTooLarge) || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("readContentEntry error = %v, want ErrMapTooLarge containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// countJSONElementsCases are inputs and the counts countJSONElements must give; they also seed
+// FuzzCountJSONElements.
+var countJSONElementsCases = []struct {
+	json string
+	want int
+}{
+	{`[]`, 1},
+	{`{}`, 1},
+	{`[{},{}]`, 4},
+	{`{"a":1,"b":[1,2]}`, 4},
+	{`"x"`, 0},
+	{`{"s":"{[,\"]}"}`, 1}, // braces, commas and an escaped quote inside a string don't count
+	{`[[],[[]]]`, 5},
+	{` [ 1 , "a,b" , null ] `, 3},
+}
+
+func TestCountJSONElements(t *testing.T) {
+	for _, tc := range countJSONElementsCases {
+		if got := countJSONElements([]byte(tc.json)); got != tc.want {
+			t.Errorf("countJSONElements(%s) = %d, want %d", tc.json, got, tc.want)
+		}
+	}
+}
+
+// referenceJSONElementCount counts what countJSONElements must give for valid JSON, from the
+// decoder's tokens instead of bytes: each object and array, plus, for each non-empty one, its
+// items less one. Token returns an object's keys and values as separate tokens, and a nested
+// object or array is one token of its parent.
+func referenceJSONElementCount(t *testing.T, data []byte) int {
+	t.Helper()
+	type container struct {
+		object bool
+		tokens int
+	}
+	var stack []container
+	n := 0
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber() // json.Valid accepts numbers a float64 can't hold, such as 1E700
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return n
+		}
+		if err != nil {
+			t.Fatalf("Token on valid JSON %q: %v", data, err)
+		}
+		delim, isDelim := tok.(json.Delim)
+		if len(stack) > 0 && (!isDelim || delim == '{' || delim == '[') {
+			stack[len(stack)-1].tokens++
+		}
+		switch delim {
+		case '{', '[':
+			n++
+			stack = append(stack, container{object: delim == '{'})
+		case '}', ']':
+			c := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			items := c.tokens
+			if c.object {
+				items /= 2
+			}
+			n += max(items-1, 0)
+		}
+	}
+}
+
+// FuzzCountJSONElements checks countJSONElements on any input: it never counts more elements
+// than there are bytes, and on valid JSON it matches the count from the decoder's tokens.
+func FuzzCountJSONElements(f *testing.F) {
+	for _, tc := range countJSONElementsCases {
+		f.Add([]byte(tc.json))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		got := countJSONElements(data)
+		if got > len(data) {
+			t.Fatalf("countJSONElements(%q) = %d, more than its %d bytes", data, got, len(data))
+		}
+		if !json.Valid(data) {
+			return
+		}
+		if want := referenceJSONElementCount(t, data); got != want {
+			t.Errorf("countJSONElements(%q) = %d, want %d", data, got, want)
+		}
+	})
 }
 
 func findTopicByID(root *Topic, id string) *Topic {

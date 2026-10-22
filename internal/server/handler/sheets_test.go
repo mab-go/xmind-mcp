@@ -3,6 +3,10 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,6 +131,41 @@ func TestCreateMapFileExists(t *testing.T) {
 	if string(got) != "x" {
 		t.Errorf("existing file was modified: %q", got)
 	}
+}
+
+// TestCreateFailure checks how a failed CreateNewMap is reported: a cause the caller can fix is a
+// tool error naming it, and any other failure is a protocol error. A map over the size limits
+// can't be reached through CreateMap without a 64 MiB title, so its case is tested here.
+func TestCreateFailure(t *testing.T) {
+	const absPath = "/maps/m.xmind"
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"file exists", fmt.Errorf("create map file: %w", fs.ErrExist),
+			"file already exists: /maps/m.xmind"},
+		{"missing folder", fmt.Errorf("create map file: %w", &fs.PathError{Op: "open", Path: absPath, Err: fs.ErrNotExist}),
+			"cannot create map at /maps/m.xmind: file does not exist"},
+		{"map too large", fmt.Errorf("%w: content.json is 70000000 bytes, over the 67108864-byte limit", xmind.ErrMapTooLarge),
+			"cannot create map at /maps/m.xmind: map is too large: content.json is 70000000 bytes, over the 67108864-byte limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := createFailure(absPath, tc.err)
+			if err != nil || res == nil || !res.IsError {
+				t.Fatalf("createFailure(%v) = %v, %v; want a tool error", tc.err, res, err)
+			}
+			if got := textContent(t, res); got != tc.want {
+				t.Errorf("message = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	t.Run("other failure", func(t *testing.T) {
+		res, err := createFailure(absPath, io.ErrShortWrite)
+		if res != nil || !errors.Is(err, io.ErrShortWrite) || err.Error() != "create map: short write" {
+			t.Errorf("createFailure(io.ErrShortWrite) = %v, %v; want protocol error \"create map: short write\"", res, err)
+		}
+	})
 }
 
 func TestAddSheetDeleteSheet(t *testing.T) {
