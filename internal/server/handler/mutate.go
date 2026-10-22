@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"math"
 	"slices"
 	"strconv"
@@ -52,30 +51,6 @@ type MoveTopicResponse struct {
 	ParentID     string `json:"parentId"`
 	Position     int    `json:"position"`
 	SiblingCount int    `json:"siblingCount"`
-}
-
-// plainToRealHTML converts a plain-text note string to minimal XMind-compatible HTML.
-// XMind's Notes struct requires both plain and realHTML to be populated; writing plain
-// text into realHTML directly causes the rich-text panel to display it unstyled and
-// without paragraph structure. This helper produces the same output XMind itself writes
-// for a simple plain-text note: HTML-escaped content wrapped in <div> blocks, with
-// newlines converted to </div><div> so each line is its own block element.
-func plainToRealHTML(s string) string {
-	if s == "" {
-		return ""
-	}
-	lines := strings.Split(s, "\n")
-	var b strings.Builder
-	for i, line := range lines {
-		if i == 0 {
-			b.WriteString("<div>")
-		} else {
-			b.WriteString("</div><div>")
-		}
-		b.WriteString(html.EscapeString(line))
-	}
-	b.WriteString("</div>")
-	return b.String()
 }
 
 // buildTopicsFromArgs parses MCP topics array into a forest of Topic values with fresh UUIDs.
@@ -989,14 +964,7 @@ func applyNotesFromArgs(args map[string]any, topic *xmind.Topic) *mcp.CallToolRe
 	if !ok {
 		return mcp.NewToolResultError("invalid argument notes: expected a string")
 	}
-	if s == "" {
-		topic.Notes = nil
-		return nil
-	}
-	topic.Notes = &xmind.Notes{
-		Plain:    &xmind.NoteContent{Content: s},
-		RealHTML: &xmind.NoteContent{Content: plainToRealHTML(s)},
-	}
+	topic.Notes = xmind.NotesFromPlainText(s) // nil for "", which clears the note
 	return nil
 }
 

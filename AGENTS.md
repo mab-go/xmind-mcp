@@ -53,7 +53,7 @@ internal/
       find.go             — handlers for Tier 2: search/find tools
       find_test.go        — tests for the Tier 2 handlers
       mutate.go           — handlers for Tier 3: topic mutation tools
-      mutate_test.go      — tests for the Tier 3 handlers, including idempotent-repeat and concurrent-write tests; number, range and note-HTML fuzz targets
+      mutate_test.go      — tests for the Tier 3 handlers, including idempotent-repeat and concurrent-write tests; number and range fuzz targets
       utils.go            — handlers for Tier 4: utility tools
       utils_test.go       — tests for the Tier 4 handlers, including outline round trips and find-and-replace; outline parser tests and fuzz targets
       integration_test.go — multi-tool workflows and edge cases (find then mutate, build from scratch, fixture preservation, Unicode)
@@ -66,6 +66,8 @@ internal/
     types.go              — Go structs mirroring the content.json schema
     json_codec.go         — custom JSON: per-type field tables with decode policies; unknown and undecodable keys kept raw; the save check (checkSavable)
     json_codec_test.go    — unknown-key, notes and malformed-value round trips, field tables against the structs; codec round-trip fuzz target
+    notes.go              — NotesFromPlainText: a topic note from plain text, with both plain and realHTML (plainToRealHTML)
+    notes_test.go         — NotesFromPlainText, plainToRealHTML and its fuzz target
     reader.go             — open zip, parse content.json → []Sheet (ReadMap, parseContentFromZip); readContentEntry and checkContentJSONLimits enforce the content.json byte and element limits (ErrMapTooLarge)
     reader_test.go        — ReadMap errors (including a content.json over the byte or element limit, and one longer than its header), the element count and its fuzz target, fixture parsing, and the WriteMap round trip
     writer.go             — serialize []Sheet → content.json, write back to zip (WriteMap, writeMapBody)
@@ -551,16 +553,13 @@ Always preserve existing UUIDs — never regenerate them. Generate new UUIDs onl
 
 ### Notes require both `plain` and `realHTML`
 
-When writing a topic note, both fields must be populated. Writing only `plain` leaves the rich-text panel blank in XMind; writing raw text into `realHTML` directly renders unstyled. Use the `plainToRealHTML` helper in `mutate.go` to convert:
+When writing a topic note, both fields must be populated. Writing only `plain` leaves the rich-text panel blank in XMind; writing raw text into `realHTML` directly renders unstyled. Build notes with `xmind.NotesFromPlainText` (`internal/xmind/notes.go`), never by hand; the handlers and `cmd/gen-example` both use it:
 
 ```go
-notes := &xmind.Notes{
-    Plain:    &xmind.NoteContent{Content: plainText},
-    RealHTML: &xmind.NoteContent{Content: plainToRealHTML(plainText)},
-}
+topic.Notes = xmind.NotesFromPlainText(plainText) // nil when plainText is ""
 ```
 
-`plainToRealHTML` wraps each newline-delimited line in `<div>…</div>` with HTML-escaped content, matching the output XMind itself produces.
+It fills `realHTML` through `plainToRealHTML`, which wraps each newline-delimited line in `<div>…</div>` with HTML-escaped content, matching the output XMind itself produces.
 
 ### `title` field absence vs. empty string
 
@@ -590,7 +589,7 @@ The codebase is organized in layers. When making changes, understand which layer
 
 | Layer | Packages / Files | Depends on |
 |---|---|---|
-| Schema | `internal/xmind/types.go`, `json_codec.go` | stdlib only |
+| Schema | `internal/xmind/types.go`, `json_codec.go`, `notes.go` | stdlib only |
 | I/O | `internal/xmind/reader.go`, `writer.go`, `update.go`, `pathlock.go`, `atomic_replace.go` | Schema layer |
 | Handlers | `internal/server/handler/*.go` | I/O layer, Schema layer |
 | Server wiring | `internal/server/server.go`, `tools.go`, `hooks.go`, `recovery.go`, `instructions.go` | Handlers |
