@@ -68,10 +68,7 @@ func withLabels(t xmind.Topic, labels ...string) xmind.Topic {
 }
 
 func withNote(t xmind.Topic, note string) xmind.Topic {
-	t.Notes = &xmind.Notes{
-		Plain:    &xmind.NoteContent{Content: note},
-		RealHTML: &xmind.NoteContent{Content: "<div>" + note + "</div>"},
-	}
+	t.Notes = xmind.NotesFromPlainText(note)
 	return t
 }
 

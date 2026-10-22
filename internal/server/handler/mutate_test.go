@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"math"
 	"os"
@@ -2702,45 +2701,6 @@ func FuzzNonNegativeIntValue(f *testing.F) {
 		}
 		if accept && float64(got) != v {
 			t.Fatalf("nonNegativeIntValue(%v) = %d", v, got)
-		}
-	})
-}
-
-func TestPlainToRealHTML(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"", ""},
-		{"a", "<div>a</div>"},
-		{`&<>"'`, "<div>&amp;&lt;&gt;&#34;&#39;</div>"},
-		{"a\n\nb", "<div>a</div><div></div><div>b</div>"},
-		{"a\n", "<div>a</div><div></div>"},
-	} {
-		if got := plainToRealHTML(tc.in); got != tc.want {
-			t.Errorf("plainToRealHTML(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
-// FuzzPlainToRealHTML checks that plainToRealHTML loses nothing: undoing the <div> wrapping and
-// the HTML escaping gives back the plain text.
-func FuzzPlainToRealHTML(f *testing.F) {
-	for _, s := range []string{"", "a", "a\nb", "\n", "a\n", `&<>"'`, "</div><div>", "&amp;lt;"} {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, s string) {
-		out := plainToRealHTML(s)
-		if (out == "") != (s == "") {
-			t.Fatalf("plainToRealHTML(%q) = %q", s, out)
-		}
-		if s == "" {
-			return
-		}
-		inner, okPrefix := strings.CutPrefix(out, "<div>")
-		inner, okSuffix := strings.CutSuffix(inner, "</div>")
-		if !okPrefix || !okSuffix {
-			t.Fatalf("plainToRealHTML(%q) = %q, want it wrapped in <div>...</div>", s, out)
-		}
-		if back := html.UnescapeString(strings.ReplaceAll(inner, "</div><div>", "\n")); back != s {
-			t.Fatalf("plainToRealHTML(%q) = %q, which decodes to %q", s, out, back)
 		}
 	})
 }
